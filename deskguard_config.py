@@ -11,7 +11,8 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
-LOG_FILE = os.path.join(RECORDINGS_DIR, "deskguard_events.log")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
+LOG_FILE = os.path.join(LOGS_DIR, "deskguard_events.log")
 
 DEFAULTS = {
     "camera_index": 0,

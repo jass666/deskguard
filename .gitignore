@@ -1,0 +1,5 @@
+# Generated webcam footage, thumbnails, and per-clip metadata
+/recordings/
+
+# Runtime logs
+/logs/

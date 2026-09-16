@@ -31,12 +31,13 @@ import win32con
 import win32ts
 import win32api
 
-from deskguard_config import load_config, RECORDINGS_DIR, LOG_FILE
+from deskguard_config import load_config, RECORDINGS_DIR, LOGS_DIR, LOG_FILE
 
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 logging.basicConfig(
     filename=LOG_FILE,

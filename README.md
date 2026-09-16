@@ -15,6 +15,7 @@ settings without touching code. Everything stays on your machine.
 | `deskguard_config.py` | Shared config loader used by both of the above |
 | `config.json` | Your settings — created automatically on first run |
 | `recordings/` | Where clips, thumbnails, and per-clip metadata land |
+| `logs/` | Where runtime logs land |
 
 ## What the recorder does
 
@@ -32,7 +33,7 @@ settings without touching code. Everything stays on your machine.
   5 GB) by deleting the oldest clips first. A per-clip safety stop guards
   against a single unusually long lock session filling the disk.
 - Logs every event (lock, unlock, detections, deletions, errors) with a
-  timestamp to `recordings/deskguard_events.log`.
+  timestamp to `logs/deskguard_events.log`.
 
 ## What the dashboard does
 

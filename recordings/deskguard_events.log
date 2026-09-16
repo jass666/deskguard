@@ -1,6 +1,0 @@
-2026-09-16 17:42:59,398 INFO DeskGuard started. Watching for session lock/unlock. Press Ctrl+C in this console to quit.
-2026-09-16 17:44:36,823 INFO DeskGuard started. Watching for session lock/unlock. Press Ctrl+C in this console to quit.
-2026-09-16 17:44:41,153 INFO Session LOCKED - starting recording.
-2026-09-16 17:44:50,608 INFO Session UNLOCKED - stopping recording.
-2026-09-16 17:47:36,652 INFO Session LOCKED - starting recording.
-2026-09-16 17:48:13,646 INFO Session UNLOCKED - stopping recording.

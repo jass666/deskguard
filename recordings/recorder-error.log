@@ -1,6 +1,0 @@
-Python WNDPROC handler failed
-Traceback (most recent call last):
-  File "D:\Projects\Deskguard\deskguard.py", line 263, in _wnd_proc
-    def _wnd_proc(self, hwnd, msg, wparam, lparam):
-
-KeyboardInterrupt
