@@ -1,23 +1,52 @@
 """
-DeskGuard - Records webcam footage whenever the Windows session is locked
-(Win+L, auto-lock on idle, Ctrl+Alt+Del > Lock, etc.), and stops when you
-unlock. Detects motion and people, tags each clip with a metadata sidecar
-file, and enforces a total storage cap across the recordings folder.
+DeskGuard v1.2 - Records webcam footage whenever the Windows session is
+locked, and stops when you unlock.
 
-All tunable settings live in config.json (created with defaults on first
-run) - edit it directly, or use dashboard.py's Settings page.
+WHAT CHANGED IN v1.2 (and why)
+------------------------------
+v1.1.1 logged this limitation: "the webcam driver tested does not deliver
+frames after the session is locked ... the resulting MP4 may be an empty,
+approximately 257-byte file."
+
+Root cause: on Windows 10 1803+ camera access is brokered by the Windows
+Camera Frame Server. When the session locks, the input desktop switches to
+the secure (Winlogon) desktop and the Frame Server refuses to hand a camera
+stream to a process that asks for one *from a locked session*. The old code
+called cv2.VideoCapture() inside the lock handler - i.e. at exactly the
+moment the OS will not grant it - so isOpened() succeeded (DirectShow graph
+built) but every cap.read() returned False, the loop spun on `continue`
+until unlock, and VideoWriter closed a header-only file.
+
+Fix: never open the camera after the lock. A single CameraSupervisor thread
+opens the capture once at startup (while unlocked, when the grant is given)
+and keeps reading from it forever. An already-granted stream generally keeps
+flowing across the lock boundary. The lock handler now only starts/stops the
+VideoWriter; it never touches the device.
+
+Also added:
+  - Sleep inhibitor (SetThreadExecutionState) so the machine cannot drop to
+    sleep/modern standby mid-recording, which kills capture regardless.
+  - Freeze detection: if frames stop changing after lock, that is logged
+    explicitly instead of silently producing a static clip.
+  - Empty clips are deleted rather than left as 257-byte files.
+  - Automatic camera reopen with backoff if the device is lost.
+
+NOTE: because the camera is held open permanently, the webcam indicator LED
+stays lit whenever DeskGuard is running. Set "keep_camera_open": false in
+config.json to go back to v1.1 open-on-lock behaviour (not recommended).
 
 Requires (Windows only):
     pip install -r requirements.txt
 
 Run:
     python deskguard.py
-    (or use pythonw.exe to run with no console window, see README)
+    (or pythonw.exe deskguard.py for no console window, see README)
 """
 
 import os
 import sys
 import time
+import ctypes
 import threading
 import datetime
 import glob
@@ -52,6 +81,40 @@ def log(msg):
 
 
 # ---------------------------------------------------------------------------
+# Keep the machine awake while recording
+# ---------------------------------------------------------------------------
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_AWAYMODE_REQUIRED = 0x00000040
+
+
+def inhibit_sleep(on):
+    """Per-thread sleep inhibitor. Call from the thread that must stay alive.
+
+    Without this, a locked laptop hits its idle sleep timer a few minutes in
+    and the recording dies halfway through - which looks identical to the
+    frame-server problem in the logs, so it is worth ruling out.
+    """
+    try:
+        if on:
+            flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED
+            if ctypes.windll.kernel32.SetThreadExecutionState(flags) == 0:
+                # AWAYMODE is not supported on every machine; retry without it.
+                ctypes.windll.kernel32.SetThreadExecutionState(
+                    ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+                )
+        else:
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    except Exception as e:  # never let a power API failure kill the recorder
+        log(f"WARNING: could not set sleep inhibitor: {e}")
+
+
+def frame_signature(frame):
+    """Cheap hash of a frame, used only to notice a frozen stream."""
+    return int(frame[::16, ::16, 0].astype(np.int64).sum())
+
+
+# ---------------------------------------------------------------------------
 # Storage management
 # ---------------------------------------------------------------------------
 def folder_size_bytes(folder):
@@ -83,10 +146,153 @@ def enforce_storage_cap(max_total_storage_gb):
 
 
 # ---------------------------------------------------------------------------
-# Recording worker
+# Camera supervisor - owns the device for the lifetime of the process
+# ---------------------------------------------------------------------------
+BACKENDS = {
+    "dshow": cv2.CAP_DSHOW,
+    "msmf": cv2.CAP_MSMF,
+    "any": cv2.CAP_ANY,
+}
+
+
+class CameraSupervisor(threading.Thread):
+    """Opens the webcam once, while the session is unlocked, and keeps it open.
+
+    This is the whole point of v1.2: the capture grant is obtained before the
+    lock, so the Frame Server never has to decide whether to hand a stream to
+    a locked session. Consumers pull the newest frame via latest().
+    """
+
+    def __init__(self, cfg):
+        super().__init__(daemon=True)
+        self.cfg = cfg
+        self.width, self.height = cfg["resolution"]
+        self.record_fps = cfg["fps"]
+        self.idle_fps = max(1, int(cfg.get("idle_fps", 2)))
+        self.backend = BACKENDS.get(str(cfg.get("capture_backend", "dshow")).lower(),
+                                    cv2.CAP_DSHOW)
+
+        self._cap = None
+        self._lock = threading.Lock()
+        self._frame = None
+        self._frame_id = 0
+        self._frame_time = 0.0
+        self._stop = threading.Event()
+        self._recording = threading.Event()  # set => pump at full fps
+        self._consecutive_failures = 0
+
+    # -- public API ---------------------------------------------------------
+    def latest(self):
+        """Returns (frame_copy, frame_id, capture_time) or (None, 0, 0.0)."""
+        with self._lock:
+            if self._frame is None:
+                return None, 0, 0.0
+            return self._frame.copy(), self._frame_id, self._frame_time
+
+    def set_recording(self, on):
+        if on:
+            self._recording.set()
+        else:
+            self._recording.clear()
+
+    def shutdown(self):
+        self._stop.set()
+
+    # -- internals ----------------------------------------------------------
+    def _open(self):
+        self._close()
+        cap = cv2.VideoCapture(self.cfg["camera_index"], self.backend)
+        if not cap.isOpened():
+            log("ERROR: could not open webcam - is another app (Zoom/Teams) holding it?")
+            cap.release()
+            return False
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(cv2.CAP_PROP_FPS, self.record_fps)
+        # Small buffer so a locked-session backlog does not make footage lag.
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        # Prove the stream actually delivers before declaring success - an
+        # opened-but-dead capture is exactly the v1.1.1 failure mode.
+        for _ in range(10):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                self._cap = cap
+                actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                log(f"Camera opened and streaming ({actual_w}x{actual_h}, "
+                    f"backend={self.cfg.get('capture_backend', 'dshow')}).")
+                return True
+            time.sleep(0.1)
+
+        log("ERROR: camera opened but delivered no frames - treating as failed.")
+        cap.release()
+        return False
+
+    def _close(self):
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+
+    def run(self):
+        backoff = 1.0
+        while not self._stop.is_set():
+            if self._cap is None:
+                if self._open():
+                    backoff = 1.0
+                    self._consecutive_failures = 0
+                else:
+                    # Never give up - the blocking app may close, or the user
+                    # may unlock and free the device.
+                    self._stop.wait(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                    continue
+
+            target_fps = self.record_fps if self._recording.is_set() else self.idle_fps
+            interval = 1.0 / max(1, target_fps)
+            loop_start = time.time()
+
+            ok, frame = self._cap.read()
+            if ok and frame is not None:
+                self._consecutive_failures = 0
+                if frame.shape[1] != self.width or frame.shape[0] != self.height:
+                    frame = cv2.resize(frame, (self.width, self.height))
+                with self._lock:
+                    self._frame = frame
+                    self._frame_id += 1
+                    self._frame_time = time.time()
+            else:
+                self._consecutive_failures += 1
+                if self._consecutive_failures in (15, 60):
+                    log(f"WARNING: {self._consecutive_failures} consecutive failed "
+                        f"reads{' WHILE LOCKED' if self._recording.is_set() else ''} "
+                        f"- camera stream may have been revoked.")
+                if self._consecutive_failures >= 120:
+                    log("Camera stream lost - reopening device.")
+                    self._close()
+                    self._consecutive_failures = 0
+                    continue
+
+            sleep_for = interval - (time.time() - loop_start)
+            if sleep_for > 0:
+                self._stop.wait(sleep_for)
+
+        self._close()
+
+
+# ---------------------------------------------------------------------------
+# Recording worker - consumes frames, never opens the device
 # ---------------------------------------------------------------------------
 class RecordingSession:
-    def __init__(self):
+    def __init__(self, camera):
+        self.camera = camera
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -103,26 +309,21 @@ class RecordingSession:
             self._thread.join(timeout=10)
 
     def _run(self):
-        cfg = load_config()  # re-read at the start of every lock, so dashboard changes apply
-        width, height = cfg["resolution"]
+        cfg = load_config()
+        width, height = self.camera.width, self.camera.height
         fps = cfg["fps"]
+        freeze_after = float(cfg.get("freeze_detect_sec", 8))
+        discard_empty = bool(cfg.get("discard_empty_clips", True))
 
         enforce_storage_cap(cfg["max_total_storage_gb"])
+        inhibit_sleep(True)
+        self.camera.set_recording(True)
 
         start_dt = datetime.datetime.now()
         timestamp = start_dt.strftime("%Y%m%d_%H%M%S")
         filename = f"lock_{timestamp}.mp4"
         filepath = os.path.join(RECORDINGS_DIR, filename)
         meta_path = os.path.join(RECORDINGS_DIR, f"lock_{timestamp}.json")
-
-        cap = cv2.VideoCapture(cfg["camera_index"], cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            log("ERROR: could not open webcam - is it in use by another app?")
-            return
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        cap.set(cv2.CAP_PROP_FPS, fps)
 
         fourcc = cv2.VideoWriter_fourcc(*cfg["codec"])
         writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
@@ -140,29 +341,56 @@ class RecordingSession:
             "fps": fps,
             "person_events": [],
             "motion_events": [],
+            "frames_written": 0,
+            "warnings": [],
         }
 
         log(f"Recording started -> {filename}")
 
-        frame_count = 0
+        frames_written = 0
+        last_frame_id = 0
         frame_interval = 1.0 / fps
         person_check_every_n = max(1, int(fps * cfg["person_check_interval_sec"]))
         prev_gray = None
         last_motion_log = 0.0
+        last_new_frame_at = time.time()
+        last_signature = None
+        freeze_reported = False
+        starvation_reported = False
 
         try:
             while not self._stop_event.is_set():
                 loop_start = time.time()
 
-                ok, frame = cap.read()
-                if not ok:
-                    log("WARNING: dropped frame / camera read failed")
-                    time.sleep(0.2)
+                frame, frame_id, _ = self.camera.latest()
+
+                if frame is None or frame_id == last_frame_id:
+                    # No new frame yet. Distinguish "camera never delivered
+                    # anything after lock" from "just a slow tick".
+                    starved_for = time.time() - last_new_frame_at
+                    if starved_for > freeze_after and not starvation_reported:
+                        msg = (f"No new frames for {starved_for:.0f}s after lock - "
+                               f"the camera stream was almost certainly revoked by "
+                               f"Windows. See README troubleshooting.")
+                        log("WARNING: " + msg)
+                        metadata["warnings"].append(msg)
+                        starvation_reported = True
+                    time.sleep(0.05)
                     continue
 
-                frame = cv2.resize(frame, (width, height))
-                frame_count += 1
-                now = time.time()
+                last_frame_id = frame_id
+                last_new_frame_at = time.time()
+                now = last_new_frame_at
+
+                # A stream that ticks but never changes = frozen last frame.
+                sig = frame_signature(frame)
+                if last_signature is not None and sig == last_signature:
+                    if (now - last_new_frame_at) > freeze_after and not freeze_reported:
+                        msg = "Frames are arriving but identical - stream appears frozen."
+                        log("WARNING: " + msg)
+                        metadata["warnings"].append(msg)
+                        freeze_reported = True
+                last_signature = sig
 
                 if cfg["detect_motion"]:
                     prev_gray, motion_logged = self._run_motion_detection(
@@ -171,7 +399,7 @@ class RecordingSession:
                     if motion_logged:
                         last_motion_log = now
 
-                if hog is not None and frame_count % person_check_every_n == 0:
+                if hog is not None and frames_written % person_check_every_n == 0:
                     self._run_person_detection(hog, frame, cfg, metadata, width, height)
 
                 ts_label = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -181,28 +409,47 @@ class RecordingSession:
                 )
 
                 writer.write(frame)
+                frames_written += 1
 
                 per_clip_cap_bytes = cfg["per_clip_safety_gb"] * 1024 * 1024 * 1024
-                if os.path.exists(filepath) and os.path.getsize(filepath) > per_clip_cap_bytes:
-                    log("Per-clip safety limit reached - stopping this clip early.")
-                    break
+                if frames_written % 30 == 0 and os.path.exists(filepath):
+                    if os.path.getsize(filepath) > per_clip_cap_bytes:
+                        log("Per-clip safety limit reached - stopping this clip early.")
+                        break
 
-                elapsed = time.time() - loop_start
-                sleep_for = frame_interval - elapsed
+                sleep_for = frame_interval - (time.time() - loop_start)
                 if sleep_for > 0:
                     time.sleep(sleep_for)
 
         finally:
-            cap.release()
             writer.release()
+            self.camera.set_recording(False)
+            inhibit_sleep(False)
+
             metadata["end"] = datetime.datetime.now().isoformat()
-            try:
-                metadata["size_bytes"] = os.path.getsize(filepath) if os.path.exists(filepath) else 0
-            except OSError:
-                metadata["size_bytes"] = 0
-            with open(meta_path, "w") as f:
-                json.dump(metadata, f, indent=2)
-            log(f"Recording stopped -> {filename}")
+            metadata["frames_written"] = frames_written
+
+            if frames_written == 0 and discard_empty:
+                for path in (filepath,):
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except OSError:
+                        pass
+                log("Recording produced ZERO frames - empty clip discarded. "
+                    "The camera did not stream while locked; run "
+                    "camera_lock_probe.py to find a backend that does.")
+            else:
+                try:
+                    metadata["size_bytes"] = (
+                        os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                    )
+                except OSError:
+                    metadata["size_bytes"] = 0
+                with open(meta_path, "w") as f:
+                    json.dump(metadata, f, indent=2)
+                log(f"Recording stopped -> {filename} ({frames_written} frames)")
+
             enforce_storage_cap(cfg["max_total_storage_gb"])
 
     def _run_motion_detection(self, frame, prev_gray, cfg, metadata, now, last_motion_log):
@@ -257,8 +504,10 @@ NOTIFY_FOR_THIS_SESSION = 0
 
 
 class SessionWatcher:
-    def __init__(self):
-        self.session = RecordingSession()
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.camera = CameraSupervisor(cfg)
+        self.session = RecordingSession(self.camera)
         self.hwnd = None
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
@@ -268,7 +517,9 @@ class SessionWatcher:
                 self.session.start()
             elif wparam == WTS_SESSION_UNLOCK:
                 log("Session UNLOCKED - stopping recording.")
-                self.session.stop()
+                # Stop on a helper thread so a slow writer flush cannot stall
+                # the message pump and drop the next lock notification.
+                threading.Thread(target=self.session.stop, daemon=True).start()
             return 0
         elif msg == win32con.WM_DESTROY:
             win32gui.PostQuitMessage(0)
@@ -288,17 +539,26 @@ class SessionWatcher:
         )
 
         win32ts.WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
-        log("DeskGuard started. Watching for session lock/unlock. Press Ctrl+C in this console to quit.")
+
+        if self.cfg.get("keep_camera_open", True):
+            self.camera.start()
+            log("Camera supervisor started - device held open across lock events.")
+        else:
+            log("keep_camera_open is false - v1.1 behaviour, expect empty clips.")
+
+        log("DeskGuard v1.2 started. Watching for session lock/unlock. Ctrl+C to quit.")
 
         try:
             win32gui.PumpMessages()
         finally:
             win32ts.WTSUnRegisterSessionNotification(self.hwnd)
             self.session.stop()
+            self.camera.shutdown()
 
 
 if __name__ == "__main__":
     if os.name != "nt":
         sys.exit("DeskGuard only runs on Windows (uses Win32 session notifications).")
-    watcher = SessionWatcher()
+    config = load_config()
+    watcher = SessionWatcher(config)
     watcher.run()
