@@ -1,0 +1,60 @@
+"""
+Shared config for DeskGuard: both deskguard.py (the recorder) and
+dashboard.py (the review UI) read/write the same config.json, so changing
+a setting in the dashboard takes effect on the next recording without
+editing code.
+"""
+
+import json
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
+LOG_FILE = os.path.join(RECORDINGS_DIR, "deskguard_events.log")
+
+DEFAULTS = {
+    "camera_index": 0,
+    "resolution": [640, 480],       # [width, height]
+    "fps": 8,
+    "codec": "mp4v",
+    "max_total_storage_gb": 5,
+    "per_clip_safety_gb": 4,
+    "detect_person": True,
+    "detect_motion": True,
+    "person_check_interval_sec": 2,
+    "person_confidence_threshold": 0.5,
+    "motion_threshold": 25,          # pixel intensity diff threshold
+    "motion_min_area": 500,          # min contour area (px) to count as motion
+    "motion_log_cooldown_sec": 5,    # don't log motion more than once per N sec
+}
+
+RESOLUTION_PRESETS = [
+    [320, 240],
+    [640, 480],
+    [960, 720],
+    [1280, 720],
+]
+
+
+def load_config():
+    """Read config.json, filling in any missing keys with defaults."""
+    cfg = dict(DEFAULTS)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                on_disk = json.load(f)
+            cfg.update(on_disk)
+        except (json.JSONDecodeError, OSError):
+            pass  # fall back to defaults if the file is corrupt/unreadable
+    else:
+        save_config(cfg)
+    return cfg
+
+
+def save_config(cfg):
+    os.makedirs(BASE_DIR, exist_ok=True)
+    tmp_path = CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp_path, CONFIG_PATH)  # atomic write, avoids a half-written file being read
