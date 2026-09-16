@@ -1,8 +1,8 @@
 # DeskGuard
 
-Records your webcam automatically whenever your Windows session locks
-(Win+L, walk-away auto-lock, Ctrl+Alt+Del > Lock — anything that fires a
-lock event), and stops as soon as you unlock. Comes with a local web
+Records your webcam automatically when you activate DeskGuard's virtual lock
+(by default Ctrl+Alt+L), or when your Windows session locks in native mode,
+and stops as soon as you enter the unlock code. Comes with a local web
 dashboard to browse, filter, and play back clips, and to change recording
 settings without touching code. Everything stays on your machine.
 
@@ -19,10 +19,10 @@ settings without touching code. Everything stays on your machine.
 
 ## What the recorder does
 
-- Hooks Windows' native session lock/unlock event — no polling, no
-  keylogging, just listens for the OS telling it "this session just locked."
-- Starts recording your default webcam the instant it locks, stops the
-  instant you unlock.
+- In `lock_mode: "hotkey"`, registers a global hotkey and shows a full-screen
+  DeskGuard overlay. Entering `unlock_code` closes it and stops recording.
+- In `lock_mode: "native"`, hooks Windows' native session lock/unlock event.
+- Starts recording your default webcam when the selected lock mode activates.
 - Detects **motion** (frame-difference based) and **people** (OpenCV's
   built-in HOG detector) independently, logging timestamped events for
   each and drawing a box around detected people in the footage.
@@ -64,9 +64,8 @@ localhost only — not reachable from other machines on your network):
    ```
    python deskguard.py
    ```
-   Lock your screen (Win+L) to test — a new file should appear in
-   `recordings/` and the console should print "Session LOCKED - starting
-   recording."
+   Press Ctrl+Alt+L to test — the DeskGuard overlay should appear. Enter the
+   configured `unlock_code` (the sample config uses `1234`) to dismiss it.
 4. In a separate terminal, start the dashboard:
    ```
    python dashboard.py
@@ -122,3 +121,12 @@ To stop the recorder, use Task Manager and end the `pythonw.exe` process
   Check your workplace's policy on personal recording devices before
   deploying this, and keep the recordings folder private (it's on your
   local disk, not synced anywhere by this script or the dashboard).
+- **Virtual lock security**: the hotkey overlay is a convenience lock inside
+  DeskGuard, not the Windows secure desktop. Someone who can use Task Manager
+  or stop the process may bypass it. Use `lock_mode: "native"` when you need
+  actual Windows session protection.
+- **Dashboard access**: the web dashboard now requires a password. The initial
+  password is `227842`; change it from the
+  Settings page before relying on the dashboard. The same page lets you choose
+  `lock_mode`, hotkey modifiers, and the hotkey key. Restart the NSSM service
+  after changing the hotkey so the recorder registers the new combination.

@@ -17,13 +17,66 @@ Then open http://127.0.0.1:5151 in a browser.
 import os
 import json
 import datetime
+import hmac
+import secrets
+from html import escape
 
 import cv2
-from flask import Flask, request, redirect, url_for, send_from_directory, abort, Response
+from flask import (
+    Flask, request, redirect, url_for, send_from_directory, abort, Response,
+    session,
+)
 
 from deskguard_config import load_config, save_config, RECORDINGS_DIR, RESOLUTION_PRESETS
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("DESKGUARD_SESSION_SECRET") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+INITIAL_DASHBOARD_PASSWORD = "227842"
+
+
+@app.before_request
+def require_login():
+    if request.endpoint not in ("login",) and not session.get("authenticated"):
+        return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+
+    error = ""
+    if request.method == "POST":
+        configured = str(load_config().get("dashboard_password", INITIAL_DASHBOARD_PASSWORD))
+        supplied = request.form.get("password", "")
+        if configured and hmac.compare_digest(supplied, configured):
+            session["authenticated"] = True
+            requested = request.args.get("next", "")
+            destination = requested if requested.startswith("/") else url_for("index")
+            return redirect(destination)
+        error = "Incorrect password."
+
+    return f"""<!doctype html>
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DeskGuard login</title><style>{BASE_CSS}
+    .login-wrap {{ min-height:100vh; display:grid; place-items:center; }}
+    .login-card {{ width:min(360px, calc(100vw - 40px)); background:var(--panel); border:1px solid var(--border); padding:28px; border-radius:8px; }}
+    .login-card input {{ width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:4px; font:inherit; margin:14px 0; }}
+    .error {{ color:#ff8a80; font-size:13px; }}
+    </style></head><body><div class="login-wrap"><div class="login-card">
+    <div class="brand">DESK<span>GUARD</span></div><h1 style="margin-top:22px">Dashboard login</h1>
+    <div class="subtitle">Enter your dashboard password to continue.</div>
+    {'<div class="error">' + escape(error) + '</div>' if error else ''}
+    <form method="post"><input type="password" name="password" placeholder="Password" autofocus required>
+    <button class="save-btn" type="submit">Sign in</button></form>
+    </div></div></body></html>"""
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # ---------------------------------------------------------------------------
 # Data helpers
@@ -270,7 +323,7 @@ a.btn:hover, button.btn:hover { color: var(--text); border-color: var(--muted); 
 form.settings { display: flex; flex-direction: column; gap: 20px; max-width: 480px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
-.field input[type=number], .field select {
+.field input[type=number], .field input[type=password], .field input[type=text], .field select {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
@@ -309,6 +362,7 @@ def layout(active, body_html):
 <div class="shell">
   <div class="sidebar">
     <div class="brand">DESK<span>GUARD</span></div>
+    <a class="nav-link" href="/logout">Sign out</a>
     <div class="nav-group">
       <div class="nav-label">Recordings</div>
       <a class="nav-link {'active' if active=='all' else ''}" href="/?tag=all">All clips</a>
@@ -449,6 +503,15 @@ def settings():
         cfg["person_confidence_threshold"] = float(request.form["person_confidence_threshold"])
         cfg["motion_min_area"] = int(request.form["motion_min_area"])
         cfg["motion_log_cooldown_sec"] = int(request.form["motion_log_cooldown_sec"])
+        cfg["lock_mode"] = request.form.get("lock_mode", "native")
+        cfg["hotkey_modifiers"] = request.form.get("hotkey_modifiers", "ctrl+alt")
+        hotkey_key = request.form.get("hotkey_key", "L").strip().upper()
+        if len(hotkey_key) != 1 or not hotkey_key.isalnum():
+            hotkey_key = "L"
+        cfg["hotkey_key"] = hotkey_key
+        new_dashboard_password = request.form.get("dashboard_password", "")
+        if new_dashboard_password:
+            cfg["dashboard_password"] = new_dashboard_password
         save_config(cfg)
         cfg = load_config()
         saved = True
@@ -457,12 +520,44 @@ def settings():
         f'<option value="{w}x{h}" {"selected" if [w, h] == cfg["resolution"] else ""}>{w} x {h}</option>'
         for w, h in RESOLUTION_PRESETS
     )
+    lock_mode_options = "".join(
+        f'<option value="{mode}" {"selected" if cfg.get("lock_mode", "native") == mode else ""}>{label}</option>'
+        for mode, label in [("hotkey", "DeskGuard hotkey lock"), ("native", "Windows native lock")]
+    )
+    modifier_options = "".join(
+        f'<option value="{value}" {"selected" if cfg.get("hotkey_modifiers", "ctrl+alt") == value else ""}>{label}</option>'
+        for value, label in [
+            ("ctrl+alt", "Ctrl + Alt"),
+            ("ctrl+shift", "Ctrl + Shift"),
+            ("alt+shift", "Alt + Shift"),
+            ("ctrl", "Ctrl"),
+        ]
+    )
 
     body = f"""
     <h1>Settings</h1>
-    <div class="subtitle">Changes apply starting with the next lock/unlock cycle - not the recording in progress.</div>
+      <div class="subtitle">Changes apply starting with the next lock/unlock cycle - not the recording in progress.</div>
     {'<div class="saved-note">Settings saved.</div>' if saved else ''}
     <form class="settings" method="post">
+      <div class="section-label">Access and lock controls</div>
+      <div class="field">
+        <label>Dashboard password</label>
+        <input type="password" name="dashboard_password" placeholder="Leave blank to keep current password" autocomplete="new-password">
+        <div class="hint">This protects the DeskGuard web dashboard. The default is <code>change-me</code>; set a new password before exposing the dashboard.</div>
+      </div>
+      <div class="field">
+        <label>Lock mode</label>
+        <select name="lock_mode">{lock_mode_options}</select>
+      </div>
+      <div class="field">
+        <label>Virtual lock hotkey</label>
+        <div style="display:flex; gap:8px">
+          <select name="hotkey_modifiers" style="flex:1">{modifier_options}</select>
+          <input type="text" name="hotkey_key" value="{escape(str(cfg.get('hotkey_key', 'L')))}" maxlength="1" style="width:64px; text-align:center" autocomplete="off">
+        </div>
+        <div class="hint">Example: Ctrl + Alt + L. Restart the DeskGuard NSSM service after changing this setting.</div>
+      </div>
+
       <div class="section-label">Camera</div>
       <div class="field">
         <label>Camera index</label>

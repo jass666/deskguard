@@ -15,6 +15,11 @@ LOGS_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOGS_DIR, "deskguard_events.log")
 
 DEFAULTS = {
+    "lock_mode": "native",
+    "hotkey_modifiers": "ctrl+alt",
+    "hotkey_key": "L",
+    "unlock_code": "1234",
+    "dashboard_password": "227842",
     "camera_index": 0,
     "resolution": [640, 480],       # [width, height]
     "fps": 8,

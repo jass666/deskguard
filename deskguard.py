@@ -52,6 +52,7 @@ import datetime
 import glob
 import json
 import logging
+import tkinter as tk
 
 import cv2
 import numpy as np
@@ -501,6 +502,78 @@ WM_WTSSESSION_CHANGE = 0x02B1
 WTS_SESSION_LOCK = 0x7
 WTS_SESSION_UNLOCK = 0x8
 NOTIFY_FOR_THIS_SESSION = 0
+WM_HOTKEY = 0x0312
+HOTKEY_ID = 1
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+
+
+class VirtualLockOverlay:
+    """Full-screen app lock released by the configured code.
+
+    This is a convenience lock, not the Windows secure desktop.
+    """
+
+    def __init__(self, unlock_code, on_unlock):
+        self.unlock_code = str(unlock_code)
+        self.on_unlock = on_unlock
+
+    def show(self):
+        root = tk.Tk()
+        root.title("DeskGuard locked")
+        root.configure(bg="#101820")
+        root.attributes("-topmost", True)
+        root.protocol("WM_DELETE_WINDOW", lambda: None)
+        root.bind("<Alt-F4>", lambda _event: "break")
+        root.bind("<Escape>", lambda _event: "break")
+        try:
+            root.attributes("-fullscreen", True)
+        except tk.TclError:
+            root.state("zoomed")
+        root.focus_force()
+        root.grab_set()
+
+        panel = tk.Frame(root, bg="#101820")
+        panel.place(relx=0.5, rely=0.5, anchor="center")
+        tk.Label(panel, text="DeskGuard", fg="#70d6ff", bg="#101820",
+                 font=("Segoe UI", 30, "bold")).pack(pady=(0, 12))
+        tk.Label(panel, text="This computer is protected", fg="white",
+                 bg="#101820", font=("Segoe UI", 18)).pack(pady=(0, 22))
+        entry = tk.Entry(panel, show="•", width=24, justify="center",
+                         font=("Segoe UI", 18), relief="flat")
+        entry.pack(ipady=8, pady=(0, 10))
+        message = tk.Label(panel, text="Enter your unlock code", fg="#b7c9d3",
+                           bg="#101820", font=("Segoe UI", 11))
+        message.pack(pady=(0, 12))
+
+        def try_unlock(_event=None):
+            if entry.get() == self.unlock_code:
+                self.on_unlock()
+                root.grab_release()
+                root.destroy()
+            else:
+                entry.delete(0, tk.END)
+                message.configure(text="Incorrect code", fg="#ff8a80")
+                entry.focus_set()
+
+        entry.bind("<Return>", try_unlock)
+        tk.Button(panel, text="Unlock", command=try_unlock,
+                  font=("Segoe UI", 12), padx=24, pady=6).pack()
+        entry.focus_set()
+        root.mainloop()
+
+
+def hotkey_flags(cfg):
+    flags = 0
+    for modifier in str(cfg.get("hotkey_modifiers", "ctrl+alt")).lower().split("+"):
+        if modifier.strip() in ("ctrl", "control"):
+            flags |= MOD_CONTROL
+        elif modifier.strip() == "alt":
+            flags |= MOD_ALT
+        elif modifier.strip() == "shift":
+            flags |= MOD_SHIFT
+    return flags
 
 
 class SessionWatcher:
@@ -509,6 +582,7 @@ class SessionWatcher:
         self.camera = CameraSupervisor(cfg)
         self.session = RecordingSession(self.camera)
         self.hwnd = None
+        self.virtual_lock_active = False
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == WM_WTSSESSION_CHANGE:
@@ -521,10 +595,31 @@ class SessionWatcher:
                 # the message pump and drop the next lock notification.
                 threading.Thread(target=self.session.stop, daemon=True).start()
             return 0
+        elif msg == WM_HOTKEY and wparam == HOTKEY_ID:
+            if not self.virtual_lock_active:
+                self._activate_virtual_lock()
+            return 0
         elif msg == win32con.WM_DESTROY:
             win32gui.PostQuitMessage(0)
             return 0
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+    def _activate_virtual_lock(self):
+        self.virtual_lock_active = True
+        log("Virtual lock activated - starting recording.")
+        self.session.start()
+
+        def unlock():
+            log("Virtual lock unlocked - stopping recording.")
+            threading.Thread(target=self.session.stop, daemon=True).start()
+            self.virtual_lock_active = False
+
+        threading.Thread(
+            target=VirtualLockOverlay(
+                self.cfg.get("unlock_code", "1234"), unlock
+            ).show,
+            daemon=True,
+        ).start()
 
     def run(self):
         wc = win32gui.WNDCLASS()
@@ -538,7 +633,14 @@ class SessionWatcher:
             wc.hInstance, None,
         )
 
-        win32ts.WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
+        native_mode = str(self.cfg.get("lock_mode", "native")).lower() != "hotkey"
+        if native_mode:
+            win32ts.WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
+        else:
+            key = str(self.cfg.get("hotkey_key", "L"))[0].upper()
+            if not win32api.RegisterHotKey(self.hwnd, HOTKEY_ID,
+                                           hotkey_flags(self.cfg), ord(key)):
+                raise RuntimeError(f"Could not register hotkey for {key}.")
 
         if self.cfg.get("keep_camera_open", True):
             self.camera.start()
@@ -546,12 +648,18 @@ class SessionWatcher:
         else:
             log("keep_camera_open is false - v1.1 behaviour, expect empty clips.")
 
-        log("DeskGuard v1.2 started. Watching for session lock/unlock. Ctrl+C to quit.")
+        if native_mode:
+            log("DeskGuard started in native lock mode. Watching for session lock/unlock.")
+        else:
+            log(f"DeskGuard started in virtual lock mode. Press {self.cfg.get('hotkey_modifiers', 'ctrl+alt')}+{key} to lock.")
 
         try:
             win32gui.PumpMessages()
         finally:
-            win32ts.WTSUnRegisterSessionNotification(self.hwnd)
+            if native_mode:
+                win32ts.WTSUnRegisterSessionNotification(self.hwnd)
+            else:
+                win32api.UnregisterHotKey(self.hwnd, HOTKEY_ID)
             self.session.stop()
             self.camera.shutdown()
 

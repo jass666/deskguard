@@ -1,4 +1,9 @@
 {
+  "lock_mode": "hotkey",
+  "hotkey_modifiers": "ctrl+alt",
+  "hotkey_key": "L",
+  "unlock_code": "1234",
+  "dashboard_password": "227842",
   "camera_index": 0,
   "resolution": [
     1280,
