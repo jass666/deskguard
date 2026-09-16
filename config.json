@@ -1,13 +1,13 @@
 {
   "camera_index": 0,
   "resolution": [
-    640,
-    480
+    1280,
+    720
   ],
-  "fps": 8,
+  "fps": 30,
   "codec": "mp4v",
-  "max_total_storage_gb": 5,
-  "per_clip_safety_gb": 4,
+  "max_total_storage_gb": 10.0,
+  "per_clip_safety_gb": 4.0,
   "detect_person": true,
   "detect_motion": true,
   "person_check_interval_sec": 2,

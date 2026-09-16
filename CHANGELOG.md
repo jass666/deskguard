@@ -8,6 +8,27 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
+## v1.1.1 - Deployment Notes
+**Date:** 16-09-2026
+
+### Added
+- Documented deployment of the Flask dashboard as a separate NSSM service.
+- Documented exposing the dashboard through an ngrok tunnel on local port
+  `5151`, with authentication recommended before public exposure.
+- Documented the recommended split deployment: Task Scheduler for the
+  recorder and NSSM for the dashboard/ngrok processes.
+
+### Known limitations
+- The recorder receives the Windows session-lock event, but the webcam
+  driver tested does not deliver frames after the session is locked. The
+  resulting MP4 may therefore be an empty, approximately 257-byte file even
+  though the camera works while Windows is unlocked.
+- Running the recorder through NSSM is not reliable for this workflow because
+  Windows services run outside the interactive desktop session. A pre-opened
+  camera capture or separate network camera is required for further testing.
+
+---
+
 ## v1.1 - Review Dashboard
 **Date:** 16-09-2026
 
