@@ -33,6 +33,13 @@ DEFAULTS = {
     "motion_threshold": 25,          # pixel intensity diff threshold
     "motion_min_area": 500,          # min contour area (px) to count as motion
     "motion_log_cooldown_sec": 5,    # don't log motion more than once per N sec
+    "keep_camera_open": True,        # v1.2 fix - see deskguard.py module docstring
+    "block_input": True,             # mouse/escape-combo lock during virtual lock
+    "segment_seconds": 15,           # rotate to a new clip file every N seconds,
+                                      # so killing the process mid-lock loses at
+                                      # most the current segment, not the whole session
+    "heartbeat_interval_sec": 2,     # how often deskguard.py refreshes heartbeat.json
+    "watchdog_timeout_sec": 6,       # watchdog.py's stale/dead threshold
 }
 
 RESOLUTION_PRESETS = [

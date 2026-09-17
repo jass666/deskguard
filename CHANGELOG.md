@@ -4,7 +4,68 @@ All notable changes to **DeskGuard** are documented here.
 
 Project created and maintained by **Jaswant Kanojia**.
 
-**Latest release date:** 16-09-2026
+**Latest release date:** 17-09-2026
+
+---
+
+## v1.3 - Virtual Lock Input Blocking + Kill-Resistance
+**Date:** 17-09-2026
+
+### Why
+Native Windows lock mode is where the camera-frame-revocation bug lives
+(see v1.2 below) - the driver simply won't hand frames to a process once
+the *real* secure desktop is up. Rather than keep fighting that, this
+release makes `hotkey`/virtual-lock mode a real substitute for native
+lock instead of a weaker fallback: the session is never actually locked
+by Windows, so the camera never sees a lock event and keeps recording
+normally, while a full-screen overlay plus real input blocking take over
+the "keep this desk secure" job.
+
+### Added
+- **`input_lock.py`** - global low-level Win32 hooks (`WH_MOUSE_LL`,
+  `WH_KEYBOARD_LL`). While the virtual lock overlay is up: the mouse is
+  completely dead (movement, all buttons, both wheels) and the cursor is
+  pinned/hidden; the Windows key, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc, and
+  Alt+F4 are all swallowed before the OS acts on them. Normal typing
+  still reaches the unlock-code field untouched. Documented limit:
+  Ctrl+Alt+Del cannot be blocked by any userland process - it's routed
+  to Winlogon via the Secure Attention Sequence before any hook sees it.
+  Toggle with `"block_input"` in config.json.
+- **`watchdog.py`** - a separate process that polls a heartbeat file
+  written by `deskguard.py` (`logs/heartbeat.json`, refreshed every
+  `heartbeat_interval_sec`). If the recorder's heartbeat goes stale or
+  its pid actually exits *while a lock was active* - i.e. someone got to
+  Ctrl+Alt+Del -> Task Manager -> End Task, the one thing input_lock.py
+  cannot stop - the watchdog immediately calls the real
+  `LockWorkStation()` API. This turns "the recorder got killed" from a
+  clean escape into: the machine is now under the actual Windows lock
+  screen, and whatever was captured in the seconds it took to reach
+  Task Manager is already saved to disk.
+- **Segmented recording** - lock sessions now write a new clip file
+  every `segment_seconds` (default 15s) instead of one file for the
+  whole session. A kill mid-lock now costs at most the current segment,
+  not the whole recording. Motion/freeze detection state carries across
+  segment boundaries so nothing resets mid-session.
+- **`DeskGuard_TaskScheduler_Setup.bat`** - registers both
+  `deskguard.py` and `watchdog.py` as "run at logon" Scheduled Tasks in
+  the interactive session (not NSSM - see the script header for why:
+  Session 0 services can't open a camera or install input hooks tied to
+  the logged-in user's desktop).
+- New config keys: `block_input`, `segment_seconds`,
+  `heartbeat_interval_sec`, `watchdog_timeout_sec`.
+- **Instant identification snapshot** - a JPEG is saved the moment the
+  first frame of a lock session arrives, completely independent of the
+  video segment pipeline. If a segment file, codec, or disk write ever
+  fails, this still exists - it's the fastest, least-dependent path to
+  "who did it", which is the actual point of the lock.
+- Segment metadata now records `windows_user` (the active Windows
+  account at record time) alongside the video/detection data.
+
+### Known limitation carried forward
+Ctrl+Alt+Del itself is un-blockable by design (see above) - this was
+true before this release and remains true after it. What changed is
+the response: instead of silently letting the process die, the watchdog
+now converts that specific escape into a real OS-level lock.
 
 ---
 

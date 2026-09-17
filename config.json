@@ -19,5 +19,10 @@
   "person_confidence_threshold": 0.5,
   "motion_threshold": 25,
   "motion_min_area": 500,
-  "motion_log_cooldown_sec": 5
+  "motion_log_cooldown_sec": 5,
+  "keep_camera_open": true,
+  "block_input": true,
+  "segment_seconds": 15,
+  "heartbeat_interval_sec": 2,
+  "watchdog_timeout_sec": 6
 }

@@ -47,6 +47,7 @@ import os
 import sys
 import time
 import ctypes
+import getpass
 import threading
 import datetime
 import glob
@@ -62,6 +63,9 @@ import win32ts
 import win32api
 
 from deskguard_config import load_config, RECORDINGS_DIR, LOGS_DIR, LOG_FILE
+from input_lock import InputLock
+
+HEARTBEAT_PATH = os.path.join(LOGS_DIR, "heartbeat.json")
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -108,6 +112,28 @@ def inhibit_sleep(on):
             ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
     except Exception as e:  # never let a power API failure kill the recorder
         log(f"WARNING: could not set sleep inhibitor: {e}")
+
+
+def write_heartbeat(locked):
+    """Refreshes logs/heartbeat.json for watchdog.py to poll.
+
+    Written on a fixed interval regardless of lock state (see
+    SessionWatcher._heartbeat_loop) so a stale timestamp reliably means
+    "this process stopped running/responding", not "it just hasn't
+    locked recently".
+    """
+    payload = {
+        "pid": os.getpid(),
+        "ts": datetime.datetime.now().isoformat(),
+        "locked": bool(locked),
+    }
+    tmp_path = HEARTBEAT_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp_path, HEARTBEAT_PATH)  # atomic, same trick as save_config
+    except OSError as e:
+        log(f"WARNING: could not write heartbeat: {e}")
 
 
 def frame_signature(frame):
@@ -309,19 +335,18 @@ class RecordingSession:
         if self._thread:
             self._thread.join(timeout=10)
 
-    def _run(self):
-        cfg = load_config()
-        width, height = self.camera.width, self.camera.height
-        fps = cfg["fps"]
-        freeze_after = float(cfg.get("freeze_detect_sec", 8))
-        discard_empty = bool(cfg.get("discard_empty_clips", True))
+    @staticmethod
+    def _open_segment(cfg, width, height, fps):
+        """Starts one segment's file + writer + metadata dict.
 
-        enforce_storage_cap(cfg["max_total_storage_gb"])
-        inhibit_sleep(True)
-        self.camera.set_recording(True)
-
+        Segmenting exists so that killing the process mid-lock (the one
+        thing input_lock.py cannot prevent - see its docstring) loses at
+        most the current segment, not the entire lock session. Each
+        segment is a fully independent, playable MP4 with its own JSON
+        sidecar, same as today's single-clip-per-lock files were.
+        """
         start_dt = datetime.datetime.now()
-        timestamp = start_dt.strftime("%Y%m%d_%H%M%S")
+        timestamp = start_dt.strftime("%Y%m%d_%H%M%S_%f")
         filename = f"lock_{timestamp}.mp4"
         filepath = os.path.join(RECORDINGS_DIR, filename)
         meta_path = os.path.join(RECORDINGS_DIR, f"lock_{timestamp}.json")
@@ -329,15 +354,11 @@ class RecordingSession:
         fourcc = cv2.VideoWriter_fourcc(*cfg["codec"])
         writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
 
-        hog = None
-        if cfg["detect_person"]:
-            hog = cv2.HOGDescriptor()
-            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-
         metadata = {
             "file": filename,
             "start": start_dt.isoformat(),
             "end": None,
+            "windows_user": getpass.getuser(),
             "resolution": [width, height],
             "fps": fps,
             "person_events": [],
@@ -345,10 +366,59 @@ class RecordingSession:
             "frames_written": 0,
             "warnings": [],
         }
+        log(f"Recording segment started -> {filename}")
+        return writer, filepath, meta_path, metadata, filename
 
-        log(f"Recording started -> {filename}")
+    @staticmethod
+    def _finalize_segment(writer, filepath, meta_path, metadata, frames_written,
+                           discard_empty):
+        writer.release()
+        metadata["end"] = datetime.datetime.now().isoformat()
+        metadata["frames_written"] = frames_written
 
-        frames_written = 0
+        if frames_written == 0 and discard_empty:
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except OSError:
+                pass
+            log("Segment produced ZERO frames - empty clip discarded. "
+                "The camera did not stream while locked; run "
+                "camera_lock_probe.py to find a backend that does.")
+            return
+
+        try:
+            metadata["size_bytes"] = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+        except OSError:
+            metadata["size_bytes"] = 0
+        with open(meta_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        log(f"Segment finalized -> {metadata['file']} ({frames_written} frames)")
+
+    def _run(self):
+        cfg = load_config()
+        width, height = self.camera.width, self.camera.height
+        fps = cfg["fps"]
+        freeze_after = float(cfg.get("freeze_detect_sec", 8))
+        discard_empty = bool(cfg.get("discard_empty_clips", True))
+        segment_seconds = float(cfg.get("segment_seconds", 15))
+
+        enforce_storage_cap(cfg["max_total_storage_gb"])
+        inhibit_sleep(True)
+        self.camera.set_recording(True)
+
+        hog = None
+        if cfg["detect_person"]:
+            hog = cv2.HOGDescriptor()
+            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+        writer, filepath, meta_path, metadata, filename = self._open_segment(
+            cfg, width, height, fps
+        )
+        segment_started_at = time.time()
+
+        frames_written = 0          # this segment only
+        total_frames_written = 0    # whole lock session, for the final log line
         last_frame_id = 0
         frame_interval = 1.0 / fps
         person_check_every_n = max(1, int(fps * cfg["person_check_interval_sec"]))
@@ -358,6 +428,8 @@ class RecordingSession:
         last_signature = None
         freeze_reported = False
         starvation_reported = False
+        first_frame_saved = False
+        per_clip_cap_bytes = cfg["per_clip_safety_gb"] * 1024 * 1024 * 1024
 
         try:
             while not self._stop_event.is_set():
@@ -383,6 +455,25 @@ class RecordingSession:
                 last_new_frame_at = time.time()
                 now = last_new_frame_at
 
+                if not first_frame_saved:
+                    # Guaranteed identification shot: written the instant the
+                    # first frame arrives, completely independent of the video
+                    # segment pipeline below. If a segment file, codec, or
+                    # disk write ever fails, this still exists - the whole
+                    # point of the lock is "who did it", and this is the
+                    # fastest, least-dependent way to answer that.
+                    snap_path = os.path.join(
+                        RECORDINGS_DIR,
+                        f"{os.path.splitext(filename)[0]}_snapshot.jpg",
+                    )
+                    try:
+                        cv2.imwrite(snap_path, frame)
+                        log(f"Instant identification snapshot saved -> "
+                            f"{os.path.basename(snap_path)}")
+                    except Exception as e:
+                        log(f"WARNING: could not save instant snapshot: {e}")
+                    first_frame_saved = True
+
                 # A stream that ticks but never changes = frozen last frame.
                 sig = frame_signature(frame)
                 if last_signature is not None and sig == last_signature:
@@ -400,7 +491,7 @@ class RecordingSession:
                     if motion_logged:
                         last_motion_log = now
 
-                if hog is not None and frames_written % person_check_every_n == 0:
+                if hog is not None and total_frames_written % person_check_every_n == 0:
                     self._run_person_detection(hog, frame, cfg, metadata, width, height)
 
                 ts_label = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -411,46 +502,47 @@ class RecordingSession:
 
                 writer.write(frame)
                 frames_written += 1
+                total_frames_written += 1
 
-                per_clip_cap_bytes = cfg["per_clip_safety_gb"] * 1024 * 1024 * 1024
+                size_cap_hit = False
                 if frames_written % 30 == 0 and os.path.exists(filepath):
                     if os.path.getsize(filepath) > per_clip_cap_bytes:
-                        log("Per-clip safety limit reached - stopping this clip early.")
+                        size_cap_hit = True
+
+                rotate_due = (time.time() - segment_started_at) >= segment_seconds
+
+                if size_cap_hit or rotate_due:
+                    self._finalize_segment(
+                        writer, filepath, meta_path, metadata, frames_written, discard_empty
+                    )
+                    if size_cap_hit:
+                        log("Per-clip safety limit reached mid-segment - "
+                            "starting a fresh segment early.")
+                    if self._stop_event.is_set():
                         break
+                    writer, filepath, meta_path, metadata, filename = self._open_segment(
+                        cfg, width, height, fps
+                    )
+                    segment_started_at = time.time()
+                    frames_written = 0
+                    freeze_reported = False
+                    starvation_reported = False
+                    # prev_gray/last_signature intentionally carry over so
+                    # motion/freeze detection stays continuous across the
+                    # segment boundary instead of re-baselining each time.
 
                 sleep_for = frame_interval - (time.time() - loop_start)
                 if sleep_for > 0:
                     time.sleep(sleep_for)
 
         finally:
-            writer.release()
+            self._finalize_segment(
+                writer, filepath, meta_path, metadata, frames_written, discard_empty
+            )
             self.camera.set_recording(False)
             inhibit_sleep(False)
-
-            metadata["end"] = datetime.datetime.now().isoformat()
-            metadata["frames_written"] = frames_written
-
-            if frames_written == 0 and discard_empty:
-                for path in (filepath,):
-                    try:
-                        if os.path.exists(path):
-                            os.remove(path)
-                    except OSError:
-                        pass
-                log("Recording produced ZERO frames - empty clip discarded. "
-                    "The camera did not stream while locked; run "
-                    "camera_lock_probe.py to find a backend that does.")
-            else:
-                try:
-                    metadata["size_bytes"] = (
-                        os.path.getsize(filepath) if os.path.exists(filepath) else 0
-                    )
-                except OSError:
-                    metadata["size_bytes"] = 0
-                with open(meta_path, "w") as f:
-                    json.dump(metadata, f, indent=2)
-                log(f"Recording stopped -> {filename} ({frames_written} frames)")
-
+            log(f"Recording stopped for this lock session "
+                f"({total_frames_written} frames total).")
             enforce_storage_cap(cfg["max_total_storage_gb"])
 
     def _run_motion_detection(self, frame, prev_gray, cfg, metadata, now, last_motion_log):
@@ -515,11 +607,14 @@ class VirtualLockOverlay:
     This is a convenience lock, not the Windows secure desktop.
     """
 
-    def __init__(self, unlock_code, on_unlock):
+    def __init__(self, unlock_code, on_unlock, block_input=True):
         self.unlock_code = str(unlock_code)
         self.on_unlock = on_unlock
+        self.block_input = block_input
 
     def show(self):
+        input_lock = InputLock() if self.block_input else None
+
         root = tk.Tk()
         root.title("DeskGuard locked")
         root.configure(bg="#101820")
@@ -533,6 +628,15 @@ class VirtualLockOverlay:
             root.state("zoomed")
         root.focus_force()
         root.grab_set()
+
+        if input_lock is not None:
+            try:
+                input_lock.start()
+                log("Input lock engaged: mouse dead, escape combos blocked. "
+                    "(Ctrl+Alt+Del cannot be blocked by design - see input_lock.py.)")
+            except OSError as e:
+                log(f"WARNING: {e} Overlay is up but NOT enforcing input block.")
+                input_lock = None
 
         panel = tk.Frame(root, bg="#101820")
         panel.place(relx=0.5, rely=0.5, anchor="center")
@@ -549,6 +653,8 @@ class VirtualLockOverlay:
 
         def try_unlock(_event=None):
             if entry.get() == self.unlock_code:
+                if input_lock is not None:
+                    input_lock.stop()
                 self.on_unlock()
                 root.grab_release()
                 root.destroy()
@@ -561,7 +667,15 @@ class VirtualLockOverlay:
         tk.Button(panel, text="Unlock", command=try_unlock,
                   font=("Segoe UI", 12), padx=24, pady=6).pack()
         entry.focus_set()
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            # Safety net: if the window ever goes away through some path
+            # other than a correct unlock (it shouldn't, given
+            # WM_DELETE_WINDOW/Alt-F4/Escape are all suppressed above),
+            # make sure input is never left permanently blocked.
+            if input_lock is not None:
+                input_lock.stop()
 
 
 def hotkey_flags(cfg):
@@ -583,14 +697,26 @@ class SessionWatcher:
         self.session = RecordingSession(self.camera)
         self.hwnd = None
         self.virtual_lock_active = False
+        self._locked_for_heartbeat = False   # what watchdog.py cares about
+        self._heartbeat_stop = threading.Event()
+
+    def _heartbeat_loop(self):
+        interval = float(self.cfg.get("heartbeat_interval_sec", 2))
+        while not self._heartbeat_stop.is_set():
+            write_heartbeat(self._locked_for_heartbeat)
+            self._heartbeat_stop.wait(interval)
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == WM_WTSSESSION_CHANGE:
             if wparam == WTS_SESSION_LOCK:
                 log("Session LOCKED - starting recording.")
+                self._locked_for_heartbeat = True
+                write_heartbeat(True)  # update immediately, don't wait for the tick
                 self.session.start()
             elif wparam == WTS_SESSION_UNLOCK:
                 log("Session UNLOCKED - stopping recording.")
+                self._locked_for_heartbeat = False
+                write_heartbeat(False)
                 # Stop on a helper thread so a slow writer flush cannot stall
                 # the message pump and drop the next lock notification.
                 threading.Thread(target=self.session.stop, daemon=True).start()
@@ -606,17 +732,22 @@ class SessionWatcher:
 
     def _activate_virtual_lock(self):
         self.virtual_lock_active = True
+        self._locked_for_heartbeat = True
+        write_heartbeat(True)
         log("Virtual lock activated - starting recording.")
         self.session.start()
 
         def unlock():
             log("Virtual lock unlocked - stopping recording.")
+            self._locked_for_heartbeat = False
+            write_heartbeat(False)
             threading.Thread(target=self.session.stop, daemon=True).start()
             self.virtual_lock_active = False
 
         threading.Thread(
             target=VirtualLockOverlay(
-                self.cfg.get("unlock_code", "1234"), unlock
+                self.cfg.get("unlock_code", "1234"), unlock,
+                block_input=bool(self.cfg.get("block_input", True)),
             ).show,
             daemon=True,
         ).start()
@@ -648,6 +779,10 @@ class SessionWatcher:
         else:
             log("keep_camera_open is false - v1.1 behaviour, expect empty clips.")
 
+        heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+        log("Heartbeat thread started - watchdog.py can now supervise this process.")
+
         if native_mode:
             log("DeskGuard started in native lock mode. Watching for session lock/unlock.")
         else:
@@ -660,6 +795,8 @@ class SessionWatcher:
                 win32ts.WTSUnRegisterSessionNotification(self.hwnd)
             else:
                 win32api.UnregisterHotKey(self.hwnd, HOTKEY_ID)
+            self._heartbeat_stop.set()
+            heartbeat_thread.join(timeout=5)
             self.session.stop()
             self.camera.shutdown()
 
