@@ -315,6 +315,9 @@ a.btn:hover, button.btn:hover { color: var(--text); border-color: var(--muted); 
 .player-row { padding: 12px 4px 20px 4px; border-bottom: 1px solid var(--border); }
 .player-row video { width: 100%; max-height: 480px; background: #000; border-radius: 4px; }
 .filters { display: flex; gap: 6px; margin-bottom: 20px; }
+.bulk-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
+.bulk-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.clip-check { flex-shrink: 0; }
 .filter-chip {
   font-size: 13px;
   padding: 6px 12px;
@@ -427,6 +430,7 @@ def index():
 
             rows.append(f"""
             <div class="row">
+              <input class="clip-check" type="checkbox" name="files" value="{escape(r['file'])}" form="bulk-delete-form" aria-label="Select {escape(r['file'])}">
               <img class="thumb" src="/thumbnail/{r['file']}" loading="lazy">
               <div class="row-main">
                 <div class="row-time">{fmt_time(r['start'])}</div>
@@ -457,11 +461,22 @@ def index():
     body = f"""
     <h1>Recordings</h1>
     <div class="subtitle">Clips are grouped by lock/unlock cycle. Click Play to preview inline.</div>
+    <form id="bulk-delete-form" class="bulk-actions" method="post" action="/delete-selected" onsubmit="return confirmBulkDelete()">
+      <label><input id="select-all" type="checkbox" onchange="toggleAll(this)"> Select all</label>
+      <button id="delete-selected" class="btn" type="submit" disabled>Delete selected</button>
+    </form>
     <div class="filters">
       {filters_html}
       <a class="filter-chip" href="/?tag={escape(tag)}">Refresh</a>
     </div>
     {rows_html}
+    <script>
+      function selected() {{ return Array.from(document.querySelectorAll('.clip-check:checked')); }}
+      function updateBulkButton() {{ document.getElementById('delete-selected').disabled = selected().length === 0; }}
+      function toggleAll(source) {{ document.querySelectorAll('.clip-check').forEach(function (box) {{ box.checked = source.checked; }}); updateBulkButton(); }}
+      function confirmBulkDelete() {{ return selected().length > 0 && confirm('Delete the selected clips and their related files?'); }}
+      document.querySelectorAll('.clip-check').forEach(function (box) {{ box.addEventListener('change', updateBulkButton); }});
+    </script>
     """
     return layout(tag, body)
 
@@ -482,7 +497,9 @@ def serve_video(filename):
         import imageio_ffmpeg
         if (not os.path.exists(browser_copy) or
                 os.path.getmtime(browser_copy) < os.path.getmtime(source)):
-            tmp = browser_copy + ".tmp"
+            # Keep .mp4 as the final suffix so FFmpeg selects the MP4 muxer;
+            # a name ending only in .tmp causes conversion to fail.
+            tmp = browser_copy[:-4] + ".tmp.mp4"
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
             subprocess.run([
                 ffmpeg, "-y", "-i", source,
@@ -510,9 +527,8 @@ def serve_thumbnail(filename):
 
 
 @app.route("/delete/<path:filename>", methods=["POST"])
-def delete_recording(filename):
-    if not filename.endswith(".mp4") or "/" in filename or "\\" in filename:
-        abort(404)
+def delete_clip_assets(filename):
+    """Delete one clip and all generated files associated with it."""
     base = filename[:-4]
     for path in (
         os.path.join(VIDEO_DIR, filename),
@@ -524,6 +540,21 @@ def delete_recording(filename):
     ):
         if os.path.exists(path):
             os.remove(path)
+
+
+@app.route("/delete/<path:filename>", methods=["POST"])
+def delete_recording(filename):
+    if not filename.endswith(".mp4") or "/" in filename or "\\" in filename:
+        abort(404)
+    delete_clip_assets(filename)
+    return redirect(url_for("index", tag=request.args.get("tag", "all")))
+
+
+@app.route("/delete-selected", methods=["POST"])
+def delete_selected_recordings():
+    for filename in request.form.getlist("files"):
+        if filename.endswith(".mp4") and "/" not in filename and "\\" not in filename:
+            delete_clip_assets(filename)
     return redirect(url_for("index", tag=request.args.get("tag", "all")))
 
 

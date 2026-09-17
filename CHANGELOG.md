@@ -21,11 +21,15 @@ Project created and maintained by **Jaswant Kanojia**.
   larger detection frame, making person boxes more reliable on 16:9 webcams.
 - Added cached H.264 conversion for dashboard playback because browsers do not
   consistently decode the recorder's `mp4v` files.
+- Fixed dashboard playback conversion by ensuring FFmpeg temporary outputs
+  retain an `.mp4` suffix so the correct container is selected.
 - Added a dedicated `recordings/clips/` folder for video recordings and
   related metadata, keeping dashboard/service logs separate.
 - Further separated clip assets into `videos`, `metadata`, `snapshots`, and
   `thumbnails`; `videos` now contains video files only.
 - Added a dashboard Refresh control for reloading the current recordings view.
+- Added multi-select clip deletion with Select all support; associated metadata,
+  snapshots, thumbnails, and browser cache files are deleted together.
 - Fixed fast-forward playback by writing frames at the configured real-time
   cadence even when the camera supplies duplicate frames.
 - Added portable Windows deployment scripts that install dependencies and build
