@@ -1,4 +1,5 @@
 pywin32>=306
-opencv-python>=4.8.0
+# OpenCV 5 removed the HOG people-detector API used by DeskGuard.
+opencv-python>=4.8.0,<5
 numpy>=1.24.0
 flask>=3.0.0

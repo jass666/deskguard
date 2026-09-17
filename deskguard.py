@@ -129,13 +129,30 @@ def write_heartbeat(locked):
         "ts": datetime.datetime.now().isoformat(),
         "locked": bool(locked),
     }
-    tmp_path = HEARTBEAT_PATH + ".tmp"
+    # Include the pid so a stale temp file from a killed process can never be
+    # mistaken for this process's heartbeat.  The replace is still preferred
+    # because the watchdog may read the file at any time.
+    tmp_path = f"{HEARTBEAT_PATH}.{os.getpid()}.tmp"
     try:
         with open(tmp_path, "w") as f:
             json.dump(payload, f)
         os.replace(tmp_path, HEARTBEAT_PATH)  # atomic, same trick as save_config
     except OSError as e:
-        log(f"WARNING: could not write heartbeat: {e}")
+        # Windows can briefly deny replace when another process has the old
+        # heartbeat open.  Keep the watchdog alive with a direct write rather
+        # than letting a transient sharing violation look like a dead recorder.
+        try:
+            with open(HEARTBEAT_PATH, "w") as f:
+                json.dump(payload, f)
+            log(f"WARNING: atomic heartbeat replace failed ({e}); used direct write.")
+        except OSError as fallback_error:
+            log(f"WARNING: could not write heartbeat: {fallback_error}")
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def frame_signature(frame):
@@ -344,13 +361,30 @@ class RecordingSession:
         if self._thread and self._thread.is_alive():
             return  # already recording
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_safe, daemon=True,
+                                        name="DeskGuardRecording")
         self._thread.start()
 
     def stop(self):
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=10)
+            if self._thread.is_alive():
+                log("WARNING: recording worker did not stop within 10 seconds.")
+
+    def _run_safe(self):
+        """Log worker failures instead of losing them in a pythonw process."""
+        try:
+            self._run()
+        except Exception:
+            log("ERROR: recording worker failed:\n" +
+                logging.Formatter().formatException(sys.exc_info()))
+        finally:
+            # _run() normally performs this cleanup in its own finally block;
+            # this also covers failures during writer/HOG initialization,
+            # before that block is entered.
+            self.camera.set_recording(False)
+            inhibit_sleep(False)
 
     @staticmethod
     def _open_segment(cfg, width, height, fps):
@@ -432,8 +466,19 @@ class RecordingSession:
 
         hog = None
         if cfg["detect_person"]:
-            hog = cv2.HOGDescriptor()
-            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+            # Some OpenCV wheels (notably the minimal/headless builds) omit
+            # the HOG APIs.  Person detection must not prevent the core
+            # recording path from starting in that environment.
+            hog_type = getattr(cv2, "HOGDescriptor", None)
+            detector_factory = getattr(
+                cv2, "HOGDescriptor_getDefaultPeopleDetector", None
+            )
+            if hog_type is None or detector_factory is None:
+                log("WARNING: person detection unavailable in this OpenCV build; "
+                    "recording will continue without it.")
+            else:
+                hog = hog_type()
+                hog.setSVMDetector(detector_factory())
 
         writer, filepath, meta_path, metadata, filename = self._open_segment(
             cfg, width, height, fps
@@ -518,7 +563,18 @@ class RecordingSession:
                         last_motion_log = now
 
                 if hog is not None and total_frames_written % person_check_every_n == 0:
-                    self._run_person_detection(hog, frame, cfg, metadata, width, height)
+                    try:
+                        self._run_person_detection(
+                            hog, frame, cfg, metadata, width, height
+                        )
+                    except Exception as e:
+                        # A detector failure must not take down the writer.
+                        log(f"WARNING: person detection failed; continuing "
+                            f"without it for this session: {e}")
+                        metadata["warnings"].append(
+                            f"Person detection disabled after error: {e}"
+                        )
+                        hog = None
 
                 ts_label = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 cv2.putText(
@@ -876,6 +932,19 @@ class SessionWatcher:
 if __name__ == "__main__":
     if os.name != "nt":
         sys.exit("DeskGuard only runs on Windows (uses Win32 session notifications).")
+
+    # A second recorder competes for the webcam and heartbeat file.  This is
+    # easy to trigger by starting the scheduled task while an older manual
+    # pythonw.exe is still running, and it makes lock sessions appear to save
+    # nothing.  A named mutex gives the extra process a clean, observable exit.
+    _recorder_mutex = ctypes.windll.kernel32.CreateMutexW(
+        None, False, "Local\\DeskGuardRecorder"
+    )
+    if not _recorder_mutex:
+        sys.exit("Could not create DeskGuard recorder instance guard.")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        sys.exit("DeskGuard recorder is already running.")
+
     config = load_config()
     watcher = SessionWatcher(config)
     watcher.run()

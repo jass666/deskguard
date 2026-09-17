@@ -13,6 +13,24 @@ Project created and maintained by **Jaswant Kanojia**.
 ### Added
 - Added a dashboard Settings field for changing the virtual lock overlay's
   unlock code without editing `config.json`.
+- Added dashboard toggles for enabling or disabling person detection and
+  motion detection independently for new recordings.
+- Constrained `opencv-python` to the 4.x line because OpenCV 5 removes the
+  HOG people-detector API required for person movement detection.
+
+### Fixed
+- Fixed recordings not being created when the installed OpenCV build does not
+  include `HOGDescriptor`; person detection now disables itself with a warning
+  while video recording continues.
+- Added runtime protection so a person-detector error cannot stop video
+  recording for the rest of the session.
+- Added recording-worker exception logging and cleanup so writer or detection
+  failures no longer terminate silently.
+- Added a single-recorder guard and heartbeat-write fallback to prevent
+  competing recorder instances or transient Windows file-sharing errors from
+  interrupting lock-session recording.
+- Verified a real virtual-lock session saves an MP4, metadata sidecar, and
+  identification snapshot.
 
 ---
 

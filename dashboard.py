@@ -332,7 +332,8 @@ form.settings { display: flex; flex-direction: column; gap: 20px; max-width: 480
   font-size: 14px;
   font-family: inherit;
 }
-.checkbox-field { display: flex; align-items: center; gap: 8px; flex-direction: row; }
+.checkbox-field { display: flex; align-items: center; gap: 8px; flex-direction: row; flex-wrap: wrap; }
+.checkbox-field .hint { flex-basis: 100%; margin-left: 24px; }
 .section-label { font-size: 13px; color: var(--amber); margin-top: 8px; letter-spacing: 0.01em; }
 .save-btn {
   align-self: flex-start;
@@ -597,6 +598,7 @@ def settings():
       <div class="field checkbox-field">
         <input type="checkbox" name="detect_person" id="detect_person" {"checked" if cfg['detect_person'] else ""}>
         <label for="detect_person">Detect people</label>
+        <div class="hint">Enable or disable person detection for new recordings.</div>
       </div>
       <div class="field">
         <label>Person detection sensitivity (0.1 = catches more, 0.9 = fewer false positives)</label>
@@ -605,6 +607,7 @@ def settings():
       <div class="field checkbox-field">
         <input type="checkbox" name="detect_motion" id="detect_motion" {"checked" if cfg['detect_motion'] else ""}>
         <label for="detect_motion">Detect motion</label>
+        <div class="hint">Enable or disable motion detection for new recordings.</div>
       </div>
       <div class="field">
         <label>Motion sensitivity - min area (px, lower = more sensitive)</label>
