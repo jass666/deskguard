@@ -10,7 +10,7 @@ settings without touching code. Everything stays on your machine.
 
 | File | Purpose |
 |------|---------|
-| `deskguard.py` | The recorder — run this in the background, always on |
+| `deskguard.py` | The recorder — run this in the background; the webcam is activated only during a lock session in hotkey mode |
 | `dashboard.py` | The review UI — run when you want to browse clips or change settings |
 | `deskguard_config.py` | Shared config loader used by both of the above |
 | `config.json` | Your settings — created automatically on first run |

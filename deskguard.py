@@ -31,9 +31,10 @@ Also added:
   - Empty clips are deleted rather than left as 257-byte files.
   - Automatic camera reopen with backoff if the device is lost.
 
-NOTE: because the camera is held open permanently, the webcam indicator LED
-stays lit whenever DeskGuard is running. Set "keep_camera_open": false in
-config.json to go back to v1.1 open-on-lock behaviour (not recommended).
+In native Windows-lock mode, the camera can still be held open while unlocked
+so an already-granted stream survives the secure-desktop transition. In
+hotkey/virtual-lock mode, the camera is activated only for the lock session
+and released again on unlock.
 
 Requires (Windows only):
     pip install -r requirements.txt
@@ -54,6 +55,7 @@ import glob
 import json
 import logging
 import tkinter as tk
+from ctypes import wintypes
 
 import cv2
 import numpy as np
@@ -205,6 +207,7 @@ class CameraSupervisor(threading.Thread):
         self._frame_id = 0
         self._frame_time = 0.0
         self._stop = threading.Event()
+        self._active = threading.Event()      # set while a capture is needed
         self._recording = threading.Event()  # set => pump at full fps
         self._consecutive_failures = 0
 
@@ -222,8 +225,17 @@ class CameraSupervisor(threading.Thread):
         else:
             self._recording.clear()
 
+    def set_active(self, on):
+        """Enable capture, or release the device when it is not needed."""
+        if on:
+            self._active.set()
+        else:
+            self._active.clear()
+            self._recording.clear()
+
     def shutdown(self):
         self._stop.set()
+        self._active.set()  # wake a supervisor waiting for activation
 
     # -- internals ----------------------------------------------------------
     def _open(self):
@@ -271,6 +283,11 @@ class CameraSupervisor(threading.Thread):
     def run(self):
         backoff = 1.0
         while not self._stop.is_set():
+            if not self._active.is_set():
+                self._close()
+                self._stop.wait(0.25)
+                continue
+
             if self._cap is None:
                 if self._open():
                     backoff = 1.0
@@ -610,6 +627,27 @@ MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 
+_USER32 = ctypes.WinDLL("user32", use_last_error=True)
+_USER32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int,
+                                   ctypes.c_uint, ctypes.c_uint]
+_USER32.RegisterHotKey.restype = wintypes.BOOL
+_USER32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+_USER32.UnregisterHotKey.restype = wintypes.BOOL
+
+
+def register_hotkey(hwnd, hotkey_id, modifiers, key):
+    """Register a global hotkey using the Win32 API directly.
+
+    Some pywin32 builds do not expose RegisterHotKey/UnregisterHotKey on
+    win32api, so relying on that optional wrapper makes hotkey mode fail at
+    startup even though the underlying Windows API is available.
+    """
+    return bool(_USER32.RegisterHotKey(hwnd, hotkey_id, modifiers, key))
+
+
+def unregister_hotkey(hwnd, hotkey_id):
+    return bool(_USER32.UnregisterHotKey(hwnd, hotkey_id))
+
 
 class VirtualLockOverlay:
     """Full-screen app lock released by the configured code.
@@ -709,6 +747,7 @@ class SessionWatcher:
         self.virtual_lock_active = False
         self._locked_for_heartbeat = False   # what watchdog.py cares about
         self._heartbeat_stop = threading.Event()
+        self._native_notification_registered = False
 
     def _heartbeat_loop(self):
         interval = float(self.cfg.get("heartbeat_interval_sec", 2))
@@ -722,6 +761,8 @@ class SessionWatcher:
                 log("Session LOCKED - starting recording.")
                 self._locked_for_heartbeat = True
                 write_heartbeat(True)  # update immediately, don't wait for the tick
+                if not self.cfg.get("keep_camera_open", True):
+                    self.camera.set_active(True)
                 self.session.start()
             elif wparam == WTS_SESSION_UNLOCK:
                 log("Session UNLOCKED - stopping recording.")
@@ -729,7 +770,11 @@ class SessionWatcher:
                 write_heartbeat(False)
                 # Stop on a helper thread so a slow writer flush cannot stall
                 # the message pump and drop the next lock notification.
-                threading.Thread(target=self.session.stop, daemon=True).start()
+                def stop_native_recording():
+                    self.session.stop()
+                    if not self.cfg.get("keep_camera_open", True):
+                        self.camera.set_active(False)
+                threading.Thread(target=stop_native_recording, daemon=True).start()
             return 0
         elif msg == WM_HOTKEY and wparam == HOTKEY_ID:
             if not self.virtual_lock_active:
@@ -745,13 +790,17 @@ class SessionWatcher:
         self._locked_for_heartbeat = True
         write_heartbeat(True)
         log("Virtual lock activated - starting recording.")
+        self.camera.set_active(True)
         self.session.start()
 
         def unlock():
             log("Virtual lock unlocked - stopping recording.")
             self._locked_for_heartbeat = False
             write_heartbeat(False)
-            threading.Thread(target=self.session.stop, daemon=True).start()
+            def stop_virtual_recording():
+                self.session.stop()
+                self.camera.set_active(False)
+            threading.Thread(target=stop_virtual_recording, daemon=True).start()
             self.virtual_lock_active = False
 
         threading.Thread(
@@ -777,17 +826,22 @@ class SessionWatcher:
         native_mode = str(self.cfg.get("lock_mode", "native")).lower() != "hotkey"
         if native_mode:
             win32ts.WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION)
+            self._native_notification_registered = True
         else:
             key = str(self.cfg.get("hotkey_key", "L"))[0].upper()
-            if not win32api.RegisterHotKey(self.hwnd, HOTKEY_ID,
-                                           hotkey_flags(self.cfg), ord(key)):
+            if not register_hotkey(self.hwnd, HOTKEY_ID,
+                                   hotkey_flags(self.cfg), ord(key)):
                 raise RuntimeError(f"Could not register hotkey for {key}.")
 
-        if self.cfg.get("keep_camera_open", True):
-            self.camera.start()
-            log("Camera supervisor started - device held open across lock events.")
+        # Always start the lightweight supervisor, but only activate the
+        # webcam when it is needed. Native lock mode may pre-open it because
+        # some Windows camera drivers reject opening from the locked desktop.
+        self.camera.start()
+        if native_mode and self.cfg.get("keep_camera_open", True):
+            self.camera.set_active(True)
+            log("Camera supervisor started - device held open for native lock compatibility.")
         else:
-            log("keep_camera_open is false - v1.1 behaviour, expect empty clips.")
+            log("Camera supervisor started idle - webcam opens only during an active lock session.")
 
         heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         heartbeat_thread.start()
@@ -802,9 +856,10 @@ class SessionWatcher:
             win32gui.PumpMessages()
         finally:
             if native_mode:
-                win32ts.WTSUnRegisterSessionNotification(self.hwnd)
+                if self._native_notification_registered:
+                    win32ts.WTSUnRegisterSessionNotification(self.hwnd)
             else:
-                win32api.UnregisterHotKey(self.hwnd, HOTKEY_ID)
+                unregister_hotkey(self.hwnd, HOTKEY_ID)
             self._heartbeat_stop.set()
             heartbeat_thread.join(timeout=5)
             self.session.stop()

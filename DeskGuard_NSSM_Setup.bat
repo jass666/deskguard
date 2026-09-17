@@ -14,9 +14,10 @@ if %errorLevel% neq 0 (
 
 set "SERVICE=DeskGuardDashboard"
 set "APP_DIR=%~dp0"
+if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
 set "PYTHON="
 set "NSSM="
-set "LOG_DIR=%APP_DIR%logs"
+set "LOG_DIR=%APP_DIR%\logs"
 
 title DeskGuard - NSSM Setup and Control
 
@@ -39,7 +40,7 @@ if "!PYTHON!"=="" (
 :: FIND NSSM
 :: ----------------------------------------------------------------
 if exist "C:\nssm\nssm.exe" set "NSSM=C:\nssm\nssm.exe"
-if "!NSSM!"=="" if exist "%APP_DIR%nssm.exe" set "NSSM=%APP_DIR%nssm.exe"
+if "!NSSM!"=="" if exist "%APP_DIR%\nssm.exe" set "NSSM=%APP_DIR%\nssm.exe"
 if "!NSSM!"=="" (
     for /f "delims=" %%i in ('where nssm 2^>nul') do (
         if "!NSSM!"=="" set "NSSM=%%i"
@@ -54,7 +55,7 @@ if "!NSSM!"=="" (
     exit /b 1
 )
 
-if not exist "%APP_DIR%dashboard.py" (
+if not exist "%APP_DIR%\dashboard.py" (
     echo.
     echo ERROR: dashboard.py was not found in:
     echo %APP_DIR%
@@ -128,8 +129,8 @@ echo.
 %NSSM% status %SERVICE%
 echo.
 echo --- Last 15 lines of dashboard error output ---
-if exist "%LOG_DIR%dashboard-service-error.log" (
-    powershell -Command "Get-Content -LiteralPath '%LOG_DIR%dashboard-service-error.log' -Tail 15"
+if exist "%LOG_DIR%\dashboard-service-error.log" (
+    powershell -Command "Get-Content -LiteralPath '%LOG_DIR%\dashboard-service-error.log' -Tail 15"
 ) else (
     echo (no error log yet)
 )
@@ -176,12 +177,12 @@ goto MENU
 
 :DO_INSTALL
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-%NSSM% install %SERVICE% "%PYTHON%" "%APP_DIR%dashboard.py"
+%NSSM% install %SERVICE% "%PYTHON%" "%APP_DIR%\dashboard.py"
 %NSSM% set %SERVICE% AppDirectory "%APP_DIR%"
 %NSSM% set %SERVICE% Start SERVICE_AUTO_START
 %NSSM% set %SERVICE% AppRestartDelay 3000
-%NSSM% set %SERVICE% AppStdout "%LOG_DIR%dashboard-service.log"
-%NSSM% set %SERVICE% AppStderr "%LOG_DIR%dashboard-service-error.log"
+%NSSM% set %SERVICE% AppStdout "%LOG_DIR%\dashboard-service.log"
+%NSSM% set %SERVICE% AppStderr "%LOG_DIR%\dashboard-service-error.log"
 %NSSM% start %SERVICE%
 goto :eof
 
