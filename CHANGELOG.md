@@ -17,6 +17,19 @@ Project created and maintained by **Jaswant Kanojia**.
   motion detection independently for new recordings.
 - Constrained `opencv-python` to the 4.x line because OpenCV 5 removes the
   HOG people-detector API required for person movement detection.
+- Improved person detection by preserving the camera aspect ratio and using a
+  larger detection frame, making person boxes more reliable on 16:9 webcams.
+- Added cached H.264 conversion for dashboard playback because browsers do not
+  consistently decode the recorder's `mp4v` files.
+- Added a dedicated `recordings/clips/` folder for video recordings and
+  related metadata, keeping dashboard/service logs separate.
+- Further separated clip assets into `videos`, `metadata`, `snapshots`, and
+  `thumbnails`; `videos` now contains video files only.
+- Added a dashboard Refresh control for reloading the current recordings view.
+- Fixed fast-forward playback by writing frames at the configured real-time
+  cadence even when the camera supplies duplicate frames.
+- Added portable Windows deployment scripts that install dependencies and build
+  standalone recorder, watchdog, and dashboard executables with PyInstaller.
 
 ### Fixed
 - Fixed recordings not being created when the installed OpenCV build does not

@@ -17,6 +17,7 @@ Then open http://127.0.0.1:5151 in a browser.
 import os
 import json
 import datetime
+import subprocess
 import hmac
 import secrets
 from html import escape
@@ -27,7 +28,10 @@ from flask import (
     session,
 )
 
-from deskguard_config import load_config, save_config, RECORDINGS_DIR, RESOLUTION_PRESETS
+from deskguard_config import (
+    load_config, save_config, VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR,
+    THUMBNAILS_DIR, RESOLUTION_PRESETS,
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("DESKGUARD_SESSION_SECRET") or secrets.token_hex(32)
@@ -82,13 +86,14 @@ def logout():
 # Data helpers
 # ---------------------------------------------------------------------------
 def list_recordings(tag_filter="all"):
-    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    for recording_dir in (VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR, THUMBNAILS_DIR):
+        os.makedirs(recording_dir, exist_ok=True)
     items = []
-    for fname in os.listdir(RECORDINGS_DIR):
-        if not fname.endswith(".mp4"):
+    for fname in os.listdir(VIDEO_DIR):
+        if not fname.endswith(".mp4") or fname.endswith(".browser.mp4"):
             continue
-        path = os.path.join(RECORDINGS_DIR, fname)
-        meta_path = os.path.join(RECORDINGS_DIR, fname[:-4] + ".json")
+        path = os.path.join(VIDEO_DIR, fname)
+        meta_path = os.path.join(METADATA_DIR, fname[:-4] + ".json")
 
         meta = None
         if os.path.exists(meta_path):
@@ -150,21 +155,21 @@ def list_recordings(tag_filter="all"):
 
 def folder_size_gb():
     total = 0
-    for fname in os.listdir(RECORDINGS_DIR):
+    for fname in os.listdir(VIDEO_DIR):
         if fname.endswith(".mp4"):
-            total += os.path.getsize(os.path.join(RECORDINGS_DIR, fname))
+            total += os.path.getsize(os.path.join(VIDEO_DIR, fname))
     return total / (1024 ** 3)
 
 
 def thumbnail_path(fname):
-    return os.path.join(RECORDINGS_DIR, fname[:-4] + ".thumb.jpg")
+    return os.path.join(THUMBNAILS_DIR, fname[:-4] + ".thumb.jpg")
 
 
 def ensure_thumbnail(fname):
     thumb_path = thumbnail_path(fname)
     if os.path.exists(thumb_path):
         return thumb_path
-    video_path = os.path.join(RECORDINGS_DIR, fname)
+    video_path = os.path.join(VIDEO_DIR, fname)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return None
@@ -452,7 +457,10 @@ def index():
     body = f"""
     <h1>Recordings</h1>
     <div class="subtitle">Clips are grouped by lock/unlock cycle. Click Play to preview inline.</div>
-    <div class="filters">{filters_html}</div>
+    <div class="filters">
+      {filters_html}
+      <a class="filter-chip" href="/?tag={escape(tag)}">Refresh</a>
+    </div>
     {rows_html}
     """
     return layout(tag, body)
@@ -462,7 +470,33 @@ def index():
 def serve_video(filename):
     if not filename.endswith(".mp4") or "/" in filename or "\\" in filename:
         abort(404)
-    return send_from_directory(RECORDINGS_DIR, filename, conditional=True)
+    source = os.path.join(VIDEO_DIR, filename)
+    if not os.path.isfile(source):
+        abort(404)
+
+    # mp4v is a good writer-side fallback but is not decoded by many browsers.
+    # Create a cached H.264 copy for inline playback; the original remains the
+    # downloadable/archive copy.
+    browser_copy = source[:-4] + ".browser.mp4"
+    try:
+        import imageio_ffmpeg
+        if (not os.path.exists(browser_copy) or
+                os.path.getmtime(browser_copy) < os.path.getmtime(source)):
+            tmp = browser_copy + ".tmp"
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            subprocess.run([
+                ffmpeg, "-y", "-i", source,
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart", tmp,
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            os.replace(tmp, browser_copy)
+        return send_from_directory(VIDEO_DIR, os.path.basename(browser_copy),
+                                    mimetype="video/mp4", conditional=True)
+    except (ImportError, OSError, subprocess.SubprocessError):
+        # Preserve access to the original file if the optional transcoder is
+        # unavailable; downloads still work even when inline playback cannot.
+        return send_from_directory(VIDEO_DIR, filename,
+                                    mimetype="video/mp4", conditional=True)
 
 
 @app.route("/thumbnail/<path:filename>")
@@ -472,7 +506,7 @@ def serve_thumbnail(filename):
     thumb = ensure_thumbnail(filename)
     if not thumb:
         abort(404)
-    return send_from_directory(RECORDINGS_DIR, os.path.basename(thumb), conditional=True)
+    return send_from_directory(THUMBNAILS_DIR, os.path.basename(thumb), conditional=True)
 
 
 @app.route("/delete/<path:filename>", methods=["POST"])
@@ -480,10 +514,16 @@ def delete_recording(filename):
     if not filename.endswith(".mp4") or "/" in filename or "\\" in filename:
         abort(404)
     base = filename[:-4]
-    for ext in (".mp4", ".json", ".thumb.jpg"):
-        p = os.path.join(RECORDINGS_DIR, base + ext)
-        if os.path.exists(p):
-            os.remove(p)
+    for path in (
+        os.path.join(VIDEO_DIR, filename),
+        os.path.join(VIDEO_DIR, base + ".browser.mp4"),
+        os.path.join(METADATA_DIR, base + ".json"),
+        os.path.join(SNAPSHOTS_DIR, base + "_snapshot.jpg"),
+        os.path.join(THUMBNAILS_DIR, base + ".thumb.jpg"),
+        os.path.join(THUMBNAILS_DIR, base + ".browser.thumb.jpg"),
+    ):
+        if os.path.exists(path):
+            os.remove(path)
     return redirect(url_for("index", tag=request.args.get("tag", "all")))
 
 
@@ -625,5 +665,6 @@ def settings():
 
 
 if __name__ == "__main__":
-    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    for recording_dir in (VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR, THUMBNAILS_DIR):
+        os.makedirs(recording_dir, exist_ok=True)
     app.run(host="127.0.0.1", port=5151, debug=False)

@@ -14,7 +14,10 @@ settings without touching code. Everything stays on your machine.
 | `dashboard.py` | The review UI — run when you want to browse clips or change settings |
 | `deskguard_config.py` | Shared config loader used by both of the above |
 | `config.json` | Your settings — created automatically on first run |
-| `recordings/` | Where clips, thumbnails, and per-clip metadata land |
+| `recordings/clips/videos/` | Video files only |
+| `recordings/clips/metadata/` | Per-clip JSON metadata |
+| `recordings/clips/snapshots/` | Identification snapshots |
+| `recordings/clips/thumbnails/` | Dashboard thumbnails and playback cache images |
 | `logs/` | Where runtime logs land |
 
 ## What the recorder does
@@ -26,7 +29,7 @@ settings without touching code. Everything stays on your machine.
 - Detects **motion** (frame-difference based) and **people** (OpenCV's
   built-in HOG detector) independently, logging timestamped events for
   each and drawing a box around detected people in the footage.
-- Writes a `.json` metadata sidecar next to each clip (start/end time,
+- Writes a `.json` metadata file for each clip (start/end time,
   resolution, detection events) — this is what the dashboard reads to
   filter and tag clips.
 - Keeps total storage across all clips under your configured cap (default
@@ -54,6 +57,17 @@ localhost only — not reachable from other machines on your network):
 - **Storage meter** in the sidebar showing how much of your cap is used.
 
 ## Setup
+
+### Standalone Windows deployment
+
+For a device without a Python development setup, copy the project folder to
+the Windows device and double-click `DeskGuard_Build.bat`. It installs every
+required dependency and creates standalone executables in `dist/`. Then run
+`DeskGuard_Run.bat` to start the recorder, watchdog, and dashboard together.
+Open `http://127.0.0.1:5151` for the dashboard. DeskGuard is Windows-only
+because it uses Win32 webcam, lock, hotkey, and input-hook APIs.
+
+### Run from Python
 
 1. Install Python 3.9+ on Windows if you don't have it.
 2. Install dependencies:

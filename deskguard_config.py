@@ -7,10 +7,21 @@ editing code.
 
 import json
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # PyInstaller one-file builds unpack modules into a temporary directory;
+    # runtime data must live beside the executable instead.
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
+CLIPS_DIR = os.path.join(RECORDINGS_DIR, "clips")
+VIDEO_DIR = os.path.join(CLIPS_DIR, "videos")
+METADATA_DIR = os.path.join(CLIPS_DIR, "metadata")
+SNAPSHOTS_DIR = os.path.join(CLIPS_DIR, "snapshots")
+THUMBNAILS_DIR = os.path.join(CLIPS_DIR, "thumbnails")
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOGS_DIR, "deskguard_events.log")
 

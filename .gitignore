@@ -1,5 +1,22 @@
-# Generated webcam footage, thumbnails, and per-clip metadata
+# Runtime recordings and generated clip assets. In particular, never commit
+# captured video from the videos folder.
 /recordings/
+/recordings/clips/
+/recordings/clips/videos/
+/recordings/clips/metadata/
+/recordings/clips/snapshots/
+/recordings/clips/thumbnails/
 
-# Runtime logs
+# Runtime logs and temporary heartbeat/lock files
 /logs/
+*.log
+*.tmp
+
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+
+# PyInstaller build output
+build/
+dist/
+*.spec

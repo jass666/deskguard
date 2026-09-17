@@ -64,7 +64,9 @@ import win32con
 import win32ts
 import win32api
 
-from deskguard_config import load_config, RECORDINGS_DIR, LOGS_DIR, LOG_FILE
+from deskguard_config import (
+    load_config, VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR, LOGS_DIR, LOG_FILE,
+)
 from input_lock import InputLock
 
 HEARTBEAT_PATH = os.path.join(LOGS_DIR, "heartbeat.json")
@@ -72,7 +74,8 @@ HEARTBEAT_PATH = os.path.join(LOGS_DIR, "heartbeat.json")
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
+for _recording_dir in (VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR):
+    os.makedirs(_recording_dir, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -177,12 +180,19 @@ def enforce_storage_cap(max_total_storage_gb):
     """Delete oldest clips (+ their metadata/thumbnail) until under the cap."""
     cap_bytes = max_total_storage_gb * 1024 * 1024 * 1024
     files = sorted(
-        glob.glob(os.path.join(RECORDINGS_DIR, "*.mp4")),
+        glob.glob(os.path.join(VIDEO_DIR, "*.mp4")),
         key=os.path.getmtime,
     )
-    while folder_size_bytes(RECORDINGS_DIR) > cap_bytes and files:
+    while folder_size_bytes(VIDEO_DIR) > cap_bytes and files:
         oldest = files.pop(0)
-        for related in (oldest, oldest[:-4] + ".json", oldest[:-4] + ".thumb.jpg"):
+        stem = os.path.splitext(os.path.basename(oldest))[0]
+        for related in (
+            oldest,
+            os.path.join(METADATA_DIR, stem + ".json"),
+            os.path.join(SNAPSHOTS_DIR, stem + "_snapshot.jpg"),
+            os.path.join(THUMBNAILS_DIR, stem + ".thumb.jpg"),
+            os.path.join(THUMBNAILS_DIR, stem + ".browser.thumb.jpg"),
+        ):
             try:
                 if os.path.exists(related):
                     os.remove(related)
@@ -399,8 +409,8 @@ class RecordingSession:
         start_dt = datetime.datetime.now()
         timestamp = start_dt.strftime("%Y%m%d_%H%M%S_%f")
         filename = f"lock_{timestamp}.mp4"
-        filepath = os.path.join(RECORDINGS_DIR, filename)
-        meta_path = os.path.join(RECORDINGS_DIR, f"lock_{timestamp}.json")
+        filepath = os.path.join(VIDEO_DIR, filename)
+        meta_path = os.path.join(METADATA_DIR, f"lock_{timestamp}.json")
 
         fourcc = cv2.VideoWriter_fourcc(*cfg["codec"])
         writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
@@ -506,7 +516,7 @@ class RecordingSession:
 
                 frame, frame_id, _ = self.camera.latest()
 
-                if frame is None or frame_id == last_frame_id:
+                if frame is None:
                     # No new frame yet. Distinguish "camera never delivered
                     # anything after lock" from "just a slow tick".
                     starved_for = time.time() - last_new_frame_at
@@ -520,61 +530,62 @@ class RecordingSession:
                     time.sleep(0.05)
                     continue
 
-                last_frame_id = frame_id
-                last_new_frame_at = time.time()
-                now = last_new_frame_at
+                is_new_frame = frame_id != last_frame_id
+                if is_new_frame:
+                    last_frame_id = frame_id
+                    last_new_frame_at = time.time()
+                    now = last_new_frame_at
 
-                if not first_frame_saved:
-                    # Guaranteed identification shot: written the instant the
-                    # first frame arrives, completely independent of the video
-                    # segment pipeline below. If a segment file, codec, or
-                    # disk write ever fails, this still exists - the whole
-                    # point of the lock is "who did it", and this is the
-                    # fastest, least-dependent way to answer that.
-                    snap_path = os.path.join(
-                        RECORDINGS_DIR,
-                        f"{os.path.splitext(filename)[0]}_snapshot.jpg",
-                    )
-                    try:
-                        cv2.imwrite(snap_path, frame)
-                        log(f"Instant identification snapshot saved -> "
-                            f"{os.path.basename(snap_path)}")
-                    except Exception as e:
-                        log(f"WARNING: could not save instant snapshot: {e}")
-                    first_frame_saved = True
-
-                # A stream that ticks but never changes = frozen last frame.
-                sig = frame_signature(frame)
-                if last_signature is not None and sig == last_signature:
-                    if (now - last_changed_at) > freeze_after and not freeze_reported:
-                        msg = "Frames are arriving but identical - stream appears frozen."
-                        log("WARNING: " + msg)
-                        metadata["warnings"].append(msg)
-                        freeze_reported = True
-                else:
-                    last_changed_at = now
-                last_signature = sig
-
-                if cfg["detect_motion"]:
-                    prev_gray, motion_logged = self._run_motion_detection(
-                        frame, prev_gray, cfg, metadata, now, last_motion_log
-                    )
-                    if motion_logged:
-                        last_motion_log = now
-
-                if hog is not None and total_frames_written % person_check_every_n == 0:
-                    try:
-                        self._run_person_detection(
-                            hog, frame, cfg, metadata, width, height
+                    if not first_frame_saved:
+                        # Guaranteed identification shot: written the instant
+                        # the first frame arrives, independently of the video
+                        # segment pipeline.
+                        snap_path = os.path.join(
+                            SNAPSHOTS_DIR,
+                            f"{os.path.splitext(filename)[0]}_snapshot.jpg",
                         )
-                    except Exception as e:
-                        # A detector failure must not take down the writer.
-                        log(f"WARNING: person detection failed; continuing "
-                            f"without it for this session: {e}")
-                        metadata["warnings"].append(
-                            f"Person detection disabled after error: {e}"
+                        try:
+                            cv2.imwrite(snap_path, frame)
+                            log(f"Instant identification snapshot saved -> "
+                                f"{os.path.basename(snap_path)}")
+                        except Exception as e:
+                            log(f"WARNING: could not save instant snapshot: {e}")
+                        first_frame_saved = True
+
+                    # Detection only needs genuinely new camera frames.  The
+                    # current frame is still written below on every recorder
+                    # tick so the MP4 duration stays real-time.
+                    sig = frame_signature(frame)
+                    if last_signature is not None and sig == last_signature:
+                        if (now - last_changed_at) > freeze_after and not freeze_reported:
+                            msg = "Frames are arriving but identical - stream appears frozen."
+                            log("WARNING: " + msg)
+                            metadata["warnings"].append(msg)
+                            freeze_reported = True
+                    else:
+                        last_changed_at = now
+                    last_signature = sig
+
+                    if cfg["detect_motion"]:
+                        prev_gray, motion_logged = self._run_motion_detection(
+                            frame, prev_gray, cfg, metadata, now, last_motion_log
                         )
-                        hog = None
+                        if motion_logged:
+                            last_motion_log = now
+
+                    if hog is not None and total_frames_written % person_check_every_n == 0:
+                        try:
+                            self._run_person_detection(
+                                hog, frame, cfg, metadata, width, height
+                            )
+                        except Exception as e:
+                            # A detector failure must not take down the writer.
+                            log(f"WARNING: person detection failed; continuing "
+                                f"without it for this session: {e}")
+                            metadata["warnings"].append(
+                                f"Person detection disabled after error: {e}"
+                            )
+                            hog = None
 
                 ts_label = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 cv2.putText(
@@ -652,7 +663,12 @@ class RecordingSession:
         return gray, False
 
     def _run_person_detection(self, hog, frame, cfg, metadata, width, height):
-        small = cv2.resize(frame, (320, 240))
+        # Keep the camera's aspect ratio.  Stretching a 16:9 frame to 4:3
+        # makes the HOG template substantially less reliable and can cause
+        # people to be missed altogether.
+        detect_width = 640
+        detect_height = max(128, int(round(height * detect_width / width)))
+        small = cv2.resize(frame, (detect_width, detect_height))
         rects, weights = hog.detectMultiScale(
             small, winStride=(8, 8), padding=(8, 8), scale=1.05
         )
@@ -661,7 +677,7 @@ class RecordingSession:
                 ts_label = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 log(f"Person detected at {ts_label} (confidence {float(weight):.2f})")
                 metadata["person_events"].append({"time": ts_label, "confidence": float(weight)})
-                sx, sy = width / 320, height / 240
+                sx, sy = width / detect_width, height / detect_height
                 cv2.rectangle(
                     frame,
                     (int(x * sx), int(y * sy)),
