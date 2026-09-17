@@ -543,7 +543,7 @@ def settings():
       <div class="field">
         <label>Dashboard password</label>
         <input type="password" name="dashboard_password" placeholder="Leave blank to keep current password" autocomplete="new-password">
-        <div class="hint">This protects the DeskGuard web dashboard. The default is <code>change-me</code>; set a new password before exposing the dashboard.</div>
+        <div class="hint">This protects the DeskGuard web dashboard. Set a unique password before relying on it.</div>
       </div>
       <div class="field">
         <label>Lock mode</label>

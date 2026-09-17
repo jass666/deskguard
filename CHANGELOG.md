@@ -67,6 +67,17 @@ true before this release and remains true after it. What changed is
 the response: instead of silently letting the process die, the watchdog
 now converts that specific escape into a real OS-level lock.
 
+### Reliability fixes
+- Fixed freeze detection so repeated identical frames are correctly reported
+  after `freeze_detect_sec` instead of resetting the timer on every frame.
+- Made input-lock cleanup safe when the overlay unlock path and its safety
+  cleanup both run, preventing cursor visibility/state drift.
+- Hardened watchdog process-liveness checks for 64-bit Windows handles.
+- Added an explicit video-writer open check so unsupported codecs or invalid
+  recording settings fail clearly instead of producing silent empty clips.
+- Verified Python compilation, dashboard authentication/routes, and segmented
+  recording with metadata and snapshot generation using a synthetic camera.
+
 ---
 
 ## v1.1.1 - Deployment Notes

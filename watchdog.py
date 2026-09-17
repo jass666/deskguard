@@ -41,6 +41,7 @@ here - flag it if you want it added.
 """
 
 import ctypes
+from ctypes import wintypes
 import datetime
 import json
 import logging
@@ -68,6 +69,17 @@ def log(msg):
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                        ctypes.POINTER(wintypes.DWORD)]
+kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+user32.LockWorkStation.restype = wintypes.BOOL
+
 
 def pid_is_alive(pid):
     """True if a process with this pid exists and hasn't exited.
@@ -76,18 +88,18 @@ def pid_is_alive(pid):
     only dependency is the Python standard library plus ctypes - fewer
     ways for it to fail to start in the first place.
     """
-    handle = ctypes.windll.kernel32.OpenProcess(
+    handle = kernel32.OpenProcess(
         PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
     )
     if not handle:
         return False
     try:
-        exit_code = ctypes.c_ulong()
-        if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+        exit_code = ctypes.wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
             return False
         return exit_code.value == STILL_ACTIVE
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        kernel32.CloseHandle(handle)
 
 
 def read_heartbeat():
@@ -101,7 +113,7 @@ def read_heartbeat():
 def trigger_fallback_lock(reason):
     log(f"INCIDENT: {reason} while a lock was active. "
         f"Triggering real Windows lock (LockWorkStation).")
-    ok = ctypes.windll.user32.LockWorkStation()
+    ok = user32.LockWorkStation()
     if not ok:
         err = ctypes.get_last_error()
         log(f"ERROR: LockWorkStation() failed (WinError {err}). "

@@ -105,6 +105,8 @@ class InputLock:
         self._mouse_proc_ref = None  # garbage-collect the callback otherwise
         self._alt_down = False
         self._ctrl_down = False
+        self._cursor_was_clipped = False
+        self._cursor_was_hidden = False
         self._on_key_activity = on_key_activity  # optional: fires on any
         # non-blocked keydown, e.g. so the overlay can flash a hint the
         # first time someone touches the keyboard
@@ -164,12 +166,22 @@ class InputLock:
                            f"input was NOT locked.")
 
         rect = wintypes.RECT(0, 0, 1, 1)
-        user32.ClipCursor(ctypes.byref(rect))
+        if not user32.ClipCursor(ctypes.byref(rect)):
+            self.stop()
+            raise OSError("ClipCursor failed - input was NOT locked.")
+        self._cursor_was_clipped = True
         user32.ShowCursor(False)
+        self._cursor_was_hidden = True
 
     def stop(self):
-        user32.ClipCursor(None)
-        user32.ShowCursor(True)
+        # stop() is intentionally safe to call more than once: the overlay
+        # calls it on a successful unlock and again from its finally block.
+        if self._cursor_was_clipped:
+            user32.ClipCursor(None)
+            self._cursor_was_clipped = False
+        if self._cursor_was_hidden:
+            user32.ShowCursor(True)
+            self._cursor_was_hidden = False
         if self._kb_hook:
             user32.UnhookWindowsHookEx(self._kb_hook)
             self._kb_hook = None

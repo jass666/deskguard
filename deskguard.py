@@ -353,6 +353,12 @@ class RecordingSession:
 
         fourcc = cv2.VideoWriter_fourcc(*cfg["codec"])
         writer = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
+        if not writer.isOpened():
+            writer.release()
+            raise RuntimeError(
+                f"Could not open video writer for {filename} "
+                f"(codec={cfg['codec']}, size={width}x{height}, fps={fps})."
+            )
 
         metadata = {
             "file": filename,
@@ -426,6 +432,7 @@ class RecordingSession:
         last_motion_log = 0.0
         last_new_frame_at = time.time()
         last_signature = None
+        last_changed_at = time.time()
         freeze_reported = False
         starvation_reported = False
         first_frame_saved = False
@@ -477,11 +484,13 @@ class RecordingSession:
                 # A stream that ticks but never changes = frozen last frame.
                 sig = frame_signature(frame)
                 if last_signature is not None and sig == last_signature:
-                    if (now - last_new_frame_at) > freeze_after and not freeze_reported:
+                    if (now - last_changed_at) > freeze_after and not freeze_reported:
                         msg = "Frames are arriving but identical - stream appears frozen."
                         log("WARNING: " + msg)
                         metadata["warnings"].append(msg)
                         freeze_reported = True
+                else:
+                    last_changed_at = now
                 last_signature = sig
 
                 if cfg["detect_motion"]:
@@ -527,6 +536,7 @@ class RecordingSession:
                     frames_written = 0
                     freeze_reported = False
                     starvation_reported = False
+                    last_changed_at = time.time()
                     # prev_gray/last_signature intentionally carry over so
                     # motion/freeze detection stays continuous across the
                     # segment boundary instead of re-baselining each time.
