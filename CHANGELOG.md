@@ -8,6 +8,14 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
+## Unreleased
+
+### Added
+- Added a dashboard Settings field for changing the virtual lock overlay's
+  unlock code without editing `config.json`.
+
+---
+
 ## v1.3 - Virtual Lock Input Blocking + Kill-Resistance
 **Date:** 17-09-2026
 

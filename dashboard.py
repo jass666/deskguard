@@ -509,6 +509,9 @@ def settings():
         if len(hotkey_key) != 1 or not hotkey_key.isalnum():
             hotkey_key = "L"
         cfg["hotkey_key"] = hotkey_key
+        new_unlock_code = request.form.get("unlock_code", "")
+        if new_unlock_code:
+            cfg["unlock_code"] = new_unlock_code
         new_dashboard_password = request.form.get("dashboard_password", "")
         if new_dashboard_password:
             cfg["dashboard_password"] = new_dashboard_password
@@ -544,6 +547,11 @@ def settings():
         <label>Dashboard password</label>
         <input type="password" name="dashboard_password" placeholder="Leave blank to keep current password" autocomplete="new-password">
         <div class="hint">This protects the DeskGuard web dashboard. Set a unique password before relying on it.</div>
+      </div>
+      <div class="field">
+        <label>Overlay unlock code</label>
+        <input type="password" name="unlock_code" placeholder="Leave blank to keep current code" autocomplete="new-password">
+        <div class="hint">This code dismisses the DeskGuard virtual lock overlay. It applies on the next lock cycle.</div>
       </div>
       <div class="field">
         <label>Lock mode</label>

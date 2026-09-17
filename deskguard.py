@@ -677,15 +677,6 @@ class VirtualLockOverlay:
         root.focus_force()
         root.grab_set()
 
-        if input_lock is not None:
-            try:
-                input_lock.start()
-                log("Input lock engaged: mouse dead, escape combos blocked. "
-                    "(Ctrl+Alt+Del cannot be blocked by design - see input_lock.py.)")
-            except OSError as e:
-                log(f"WARNING: {e} Overlay is up but NOT enforcing input block.")
-                input_lock = None
-
         panel = tk.Frame(root, bg="#101820")
         panel.place(relx=0.5, rely=0.5, anchor="center")
         tk.Label(panel, text="DeskGuard", fg="#70d6ff", bg="#101820",
@@ -714,7 +705,23 @@ class VirtualLockOverlay:
         entry.bind("<Return>", try_unlock)
         tk.Button(panel, text="Unlock", command=try_unlock,
                   font=("Segoe UI", 12), padx=24, pady=6).pack()
-        entry.focus_set()
+        # Build and focus the entry before installing the low-level hook.
+        # This prevents the first keyboard events being swallowed while Tk is
+        # still creating the overlay widgets.
+        entry.focus_force()
+
+        if input_lock is not None:
+            try:
+                input_lock.start()
+                log("Input lock engaged: mouse dead, escape combos blocked. "
+                    "(Ctrl+Alt+Del cannot be blocked by design - see input_lock.py.)")
+            except OSError as e:
+                log(f"WARNING: {e} Overlay is up but NOT enforcing input block.")
+                input_lock = None
+
+        # Re-assert focus once the window manager has activated the topmost
+        # window. Normal text input remains pass-through in InputLock.
+        root.after(100, entry.focus_force)
         try:
             root.mainloop()
         finally:

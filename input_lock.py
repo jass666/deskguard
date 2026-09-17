@@ -88,6 +88,24 @@ LowLevelProc = ctypes.WINFUNCTYPE(
     ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
 )
 
+# Explicit signatures are required on 64-bit Windows. Without them ctypes
+# defaults handles to 32-bit integers, which can corrupt the hook handle and
+# cause normal keyboard events to stop reaching the Tk entry widget.
+user32.SetWindowsHookExW.argtypes = [
+    ctypes.c_int, LowLevelProc, wintypes.HINSTANCE, wintypes.DWORD
+]
+user32.SetWindowsHookExW.restype = ctypes.c_void_p
+user32.CallNextHookEx.argtypes = [
+    ctypes.c_void_p, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+]
+user32.CallNextHookEx.restype = ctypes.c_long
+user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+user32.ClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+user32.ClipCursor.restype = wintypes.BOOL
+user32.ShowCursor.argtypes = [ctypes.c_bool]
+user32.ShowCursor.restype = ctypes.c_int
+
 
 class InputLock:
     """Owns both low-level hooks for one virtual-lock session.
