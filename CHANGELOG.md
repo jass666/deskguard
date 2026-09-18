@@ -8,7 +8,7 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
-## v1.4
+## v1.4 – Dashboard Controls, Detection Reliability + Recording Management
 
 ### Added
 - Added a dashboard Settings field for changing the virtual lock overlay's
