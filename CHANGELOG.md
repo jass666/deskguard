@@ -8,7 +8,7 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
-## Unreleased
+## v1.4
 
 ### Added
 - Added a dashboard Settings field for changing the virtual lock overlay's
