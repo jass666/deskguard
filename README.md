@@ -86,6 +86,49 @@ because it uses Win32 webcam, lock, hotkey, and input-hook APIs.
    ```
    Open `http://127.0.0.1:5151` to browse.
 
+### Run the dashboard as a Windows service with NSSM
+
+NSSM (the Non-Sucking Service Manager) can keep the DeskGuard dashboard
+running in the background and start it automatically with Windows. The
+included `DeskGuard_NSSM_Setup.bat` installs and controls a service named
+`DeskGuardDashboard`.
+
+NSSM is used for the **dashboard only**. Do not install `deskguard.py` or
+`watchdog.py` as NSSM services: Windows services run in Session 0, while the
+recorder and watchdog must run in the logged-in user's interactive session to
+access the webcam, receive lock notifications, and install input hooks. Use
+`DeskGuard_TaskScheduler_Setup.bat` for those two processes instead.
+
+#### Install and start the dashboard service
+
+1. Download NSSM from [nssm.cc](https://nssm.cc/download) and extract
+   `nssm.exe`.
+2. Place `nssm.exe` in either `C:\nssm\nssm.exe`, the DeskGuard project
+   folder beside `DeskGuard_NSSM_Setup.bat`, or a directory on `PATH`. The
+   setup script checks those locations in that order.
+3. Make sure Python is available on `PATH` and that `dashboard.py` is in the
+   DeskGuard project folder.
+4. Right-click `DeskGuard_NSSM_Setup.bat` and choose **Run as administrator**.
+5. Choose **5 — Install service**. The script configures automatic startup,
+   restarts the dashboard after a crash, and starts the service.
+
+The dashboard remains available at `http://127.0.0.1:5151`. The service name
+is `DeskGuardDashboard`, and its output is written to:
+
+```
+logs/dashboard-service.log
+logs/dashboard-service-error.log
+```
+
+Run the setup script as administrator whenever you need to choose **1** to
+start, **2** to stop, **3** to restart, **4** to view status and recent errors,
+**6** to reinstall, or **7** to uninstall the service. Uninstalling the
+service does not delete recordings or logs.
+
+After changing dashboard-served settings that require a process restart (for
+example the recorder hotkey), choose **3 — Restart dashboard**. If the service
+does not start, choose **4 — Check status and logs** and inspect the error log.
+
 ## Running the recorder in the background (no console window)
 
 Once you've confirmed it works, run it silently with `pythonw.exe` instead
