@@ -118,6 +118,36 @@ is `DeskGuardDashboard`, and its output is written to:
 ```
 logs/dashboard-service.log
 logs/dashboard-service-error.log
+
+### Optional remote dashboard access with zrok
+
+DeskGuard can be reached remotely through a reserved zrok URL. The current
+reserved URL is:
+
+```
+https://deskguard.shares.zrok.io
+```
+
+The zrok layer does not replace the DeskGuard dashboard login. The dashboard
+password is configured in `config.json` and can be changed from Dashboard
+Settings. Hosted zrok may show its safety interstitial on the first visit;
+choose **Visit Share** once, after which the browser remembers the choice.
+
+#### Initial setup on Windows
+
+1. Download the official `zrok2.exe` release and place it at
+   `.zrok\zrok2.exe`.
+2. Run `DeskGuard_Zrok_Setup.bat` from this project folder.
+3. Enter the zrok enable token when prompted. The token is not saved in the
+   project files.
+4. Start DeskGuard normally, or let the setup/startup task launch the Python
+   dashboard and zrok share at Windows logon.
+
+The setup reserves the `public:deskguard` name, which keeps the URL stable
+across share restarts. `Start_DeskGuard_Public.ps1` starts the dashboard and
+share without zrok Basic Auth so the browser reaches the DeskGuard login.
+Keep the URL private and use a strong dashboard password; the dashboard
+contains recorded video and management controls.
 ```
 
 Run the setup script as administrator whenever you need to choose **1** to

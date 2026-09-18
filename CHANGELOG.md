@@ -8,6 +8,24 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
+## Unreleased – Persistent zrok Dashboard Access
+
+### Added
+- Added a reserved zrok public name for the remote dashboard:
+  `https://deskguard.shares.zrok.io`.
+- Added `DeskGuard_Zrok_Setup.bat` for first-time Windows zrok setup,
+  reserved-name creation, and startup-task registration.
+- Added `Start_DeskGuard_Public.ps1` to start the local dashboard and reconnect
+  the reserved zrok share after Windows logon.
+- Documented zrok setup, the dashboard-only authentication model, the hosted
+  zrok interstitial, and the security considerations for remote recordings.
+
+### Security
+- The zrok enable token and dashboard password are intentionally not stored
+  in the repository. The remote URL relies on DeskGuard's own dashboard login.
+
+---
+
 ## v1.4 – Dashboard Controls, Detection Reliability + Recording Management
 
 ### Added

@@ -751,8 +751,12 @@ class VirtualLockOverlay:
 
         panel = tk.Frame(root, bg="#101820")
         panel.place(relx=0.5, rely=0.5, anchor="center")
-        tk.Label(panel, text="DeskGuard", fg="#70d6ff", bg="#101820",
-                 font=("Segoe UI", 30, "bold")).pack(pady=(0, 12))
+        brand = tk.Frame(panel, bg="#101820")
+        brand.pack(pady=(0, 12))
+        tk.Label(brand, text="DESK", fg="#e8e6e1", bg="#101820",
+                 font=("Segoe UI", 30, "bold")).pack(side="left")
+        tk.Label(brand, text="GUARD", fg="#ffb000", bg="#101820",
+                 font=("Segoe UI", 30, "bold")).pack(side="left")
         tk.Label(panel, text="This computer is protected", fg="white",
                  bg="#101820", font=("Segoe UI", 18)).pack(pady=(0, 22))
         entry = tk.Entry(panel, show="•", width=24, justify="center",
@@ -776,7 +780,9 @@ class VirtualLockOverlay:
 
         entry.bind("<Return>", try_unlock)
         tk.Button(panel, text="Unlock", command=try_unlock,
-                  font=("Segoe UI", 12), padx=24, pady=6).pack()
+                  font=("Segoe UI", 12), padx=24, pady=6,
+                  bg="#ffb000", activebackground="#ffc233",
+                  relief="flat", borderwidth=0).pack()
         # Build and focus the entry before installing the low-level hook.
         # This prevents the first keyboard events being swallowed while Tk is
         # still creating the overlay widgets.

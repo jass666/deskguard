@@ -41,7 +41,7 @@ INITIAL_DASHBOARD_PASSWORD = "227842"
 
 @app.before_request
 def require_login():
-    if request.endpoint not in ("login",) and not session.get("authenticated"):
+    if request.endpoint not in ("login", "static") and not session.get("authenticated"):
         return redirect(url_for("login", next=request.path))
 
 
@@ -63,7 +63,9 @@ def login():
 
     return f"""<!doctype html>
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DeskGuard login</title><style>{BASE_CSS}
+    <title>DeskGuard login</title>
+    <link rel="icon" type="image/svg+xml" href="/static/deskguard-favicon.svg">
+    <style>{BASE_CSS}
     .login-wrap {{ min-height:100vh; display:grid; place-items:center; }}
     .login-card {{ width:min(360px, calc(100vw - 40px)); background:var(--panel); border:1px solid var(--border); padding:28px; border-radius:8px; }}
     .login-card input {{ width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px; border-radius:4px; font:inherit; margin:14px 0; }}
@@ -366,6 +368,7 @@ def layout(active, body_html):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeskGuard</title>
+<link rel="icon" type="image/svg+xml" href="/static/deskguard-favicon.svg">
 <style>{BASE_CSS}</style>
 </head><body>
 <div class="shell">
