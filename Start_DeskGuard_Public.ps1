@@ -14,9 +14,8 @@ if (-not $dashboard) {
     Start-Sleep -Seconds 3
 }
 
-$existingShare = Get-CimInstance Win32_Process -Filter "Name = 'zrok2.exe'" |
-    Where-Object { $_.CommandLine -like '*share public*deskguard*' }
-if (-not $existingShare) {
+$existingZrok = Get-Process -Name 'zrok2' -ErrorAction SilentlyContinue
+if (-not $existingZrok) {
     New-Item -ItemType Directory -Force (Join-Path $projectRoot 'logs') | Out-Null
     Start-Process -FilePath $zrok `
         -ArgumentList @('share', 'public', 'http://127.0.0.1:5151', '--headless', '--force-local', '--name-selection', 'public:deskguard') `
