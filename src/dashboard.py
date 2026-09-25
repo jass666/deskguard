@@ -21,6 +21,7 @@ import subprocess
 import hmac
 import secrets
 from html import escape
+from urllib.parse import urlencode
 
 import cv2
 from flask import (
@@ -87,7 +88,7 @@ def logout():
 # ---------------------------------------------------------------------------
 # Data helpers
 # ---------------------------------------------------------------------------
-def list_recordings(tag_filter="all"):
+def list_recordings(tag_filter="all", start_date=None, end_date=None):
     for recording_dir in (VIDEO_DIR, METADATA_DIR, SNAPSHOTS_DIR, THUMBNAILS_DIR):
         os.makedirs(recording_dir, exist_ok=True)
     items = []
@@ -131,6 +132,15 @@ def list_recordings(tag_filter="all"):
 
         has_person = len(person_events) > 0
         has_motion = len(motion_events) > 0
+
+        try:
+            recording_date = datetime.datetime.fromisoformat(start).date()
+        except (TypeError, ValueError):
+            recording_date = None
+        if start_date and recording_date and recording_date < start_date:
+            continue
+        if end_date and recording_date and recording_date > end_date:
+            continue
 
         if tag_filter == "person" and not has_person:
             continue
@@ -317,6 +327,8 @@ a.btn:hover, button.btn:hover { color: var(--text); border-color: var(--muted); 
 .player-row { padding: 12px 4px 20px 4px; border-bottom: 1px solid var(--border); }
 .player-row video { width: 100%; max-height: 480px; background: #000; border-radius: 4px; }
 .filters { display: flex; gap: 6px; margin-bottom: 20px; }
+.date-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -8px 0 20px; color: var(--muted); font-size: 13px; }
+.date-filters input[type=date] { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: 4px; font: inherit; }
 .bulk-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
 .bulk-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
 .clip-check { flex-shrink: 0; }
@@ -408,14 +420,40 @@ def storage_widget():
     """
 
 
+def recordings_url(tag="all", start_date="", end_date="", expand=None):
+    params = {"tag": tag}
+    if start_date:
+        params["start"] = start_date
+    if end_date:
+        params["end"] = end_date
+    if expand:
+        params["expand"] = expand
+    return "/?" + urlencode(params)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     tag = request.args.get("tag", "all")
+    start_date = request.args.get("start", "").strip()
+    end_date = request.args.get("end", "").strip()
+    try:
+        start_date_value = datetime.date.fromisoformat(start_date) if start_date else None
+    except ValueError:
+        start_date_value = None
+        start_date = ""
+    try:
+        end_date_value = datetime.date.fromisoformat(end_date) if end_date else None
+    except ValueError:
+        end_date_value = None
+        end_date = ""
+    if start_date_value and end_date_value and start_date_value > end_date_value:
+        start_date_value, end_date_value = end_date_value, start_date_value
+        start_date, end_date = end_date, start_date
     expand = request.args.get("expand")
-    recordings = list_recordings(tag)
+    recordings = list_recordings(tag, start_date_value, end_date_value)
 
     if not recordings:
         rows_html = '<div class="empty">No recordings match this filter.</div>'
@@ -429,7 +467,7 @@ def index():
                 tags_html += f'<span class="tag tag-motion">Motion &times;{r["motion_count"]}</span>'
 
             is_open = expand == r["file"]
-            toggle_url = "/" + (f'?tag={tag}' if is_open else f'?tag={tag}&expand={r["file"]}')
+            toggle_url = recordings_url(tag, start_date, end_date, None if is_open else r["file"])
 
             rows.append(f"""
             <div class="row">
@@ -457,7 +495,7 @@ def index():
         rows_html = f'<div class="ledger">{"".join(rows)}</div>'
 
     filters_html = "".join(
-        f'<a class="filter-chip {"active" if tag==t else ""}" href="/?tag={t}">{label}</a>'
+        f'<a class="filter-chip {"active" if tag==t else ""}" href="{recordings_url(t, start_date, end_date)}">{label}</a>'
         for t, label in [("all", "All"), ("person", "Person"), ("motion", "Motion only"), ("clean", "Clean")]
     )
 
@@ -470,8 +508,15 @@ def index():
     </form>
     <div class="filters">
       {filters_html}
-      <a class="filter-chip" href="/?tag={escape(tag)}">Refresh</a>
+      <a class="filter-chip" href="{recordings_url(tag, start_date, end_date)}">Refresh</a>
     </div>
+    <form class="date-filters" method="get" action="/">
+      <input type="hidden" name="tag" value="{escape(tag)}">
+      <label>From <input type="date" name="start" value="{escape(start_date)}"></label>
+      <label>To <input type="date" name="end" value="{escape(end_date)}"></label>
+      <button class="btn" type="submit">Apply dates</button>
+      <a class="btn" href="{recordings_url(tag)}">Clear dates</a>
+    </form>
     {rows_html}
     <script>
       function selected() {{ return Array.from(document.querySelectorAll('.clip-check:checked')); }}

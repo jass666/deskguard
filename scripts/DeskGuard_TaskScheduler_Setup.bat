@@ -21,7 +21,7 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
-set "APP_DIR=%~dp0"
+set "APP_DIR=%~dp0.."
 set "PYTHONW="
 set "PYTHON="
 
@@ -44,8 +44,8 @@ title DeskGuard - Task Scheduler Setup
 echo.
 echo This will register two Scheduled Tasks that start at logon, in
 echo YOUR interactive session:
-echo   1. DeskGuardRecorder  -^> %APP_DIR%deskguard.py    (pythonw, silent)
-echo   2. DeskGuardWatchdog  -^> %APP_DIR%watchdog.py      (pythonw, silent)
+echo   1. DeskGuardRecorder  -^> %APP_DIR%src\deskguard.py    (pythonw, silent)
+echo   2. DeskGuardWatchdog  -^> %APP_DIR%src\watchdog.py      (pythonw, silent)
 echo.
 echo The watchdog must run as its own process tree so killing the
 echo recorder does not also kill the thing watching it.
@@ -53,10 +53,10 @@ echo.
 pause
 
 schtasks /Create /TN "DeskGuardRecorder" /SC ONLOGON /RL HIGHEST /F ^
-    /TR "\"%PYTHONW%\" \"%APP_DIR%deskguard.py\""
+    /TR "\"%PYTHONW%\" \"%APP_DIR%src\deskguard.py\""
 
 schtasks /Create /TN "DeskGuardWatchdog" /SC ONLOGON /RL HIGHEST /F ^
-    /TR "\"%PYTHONW%\" \"%APP_DIR%watchdog.py\""
+    /TR "\"%PYTHONW%\" \"%APP_DIR%src\watchdog.py\""
 
 echo.
 echo Done. Both tasks are set to "At log on" for this user.

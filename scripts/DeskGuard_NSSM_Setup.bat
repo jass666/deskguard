@@ -13,7 +13,7 @@ if %errorLevel% neq 0 (
 )
 
 set "SERVICE=DeskGuardDashboard"
-set "APP_DIR=%~dp0"
+set "APP_DIR=%~dp0.."
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
 set "PYTHON="
 set "NSSM="
@@ -55,7 +55,7 @@ if "!NSSM!"=="" (
     exit /b 1
 )
 
-if not exist "%APP_DIR%\dashboard.py" (
+if not exist "%APP_DIR%\src\dashboard.py" (
     echo.
     echo ERROR: dashboard.py was not found in:
     echo %APP_DIR%
@@ -177,7 +177,7 @@ goto MENU
 
 :DO_INSTALL
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-%NSSM% install %SERVICE% "%PYTHON%" "%APP_DIR%\dashboard.py"
+%NSSM% install %SERVICE% "%PYTHON%" "%APP_DIR%\src\dashboard.py"
 %NSSM% set %SERVICE% AppDirectory "%APP_DIR%"
 %NSSM% set %SERVICE% Start SERVICE_AUTO_START
 %NSSM% set %SERVICE% AppRestartDelay 3000

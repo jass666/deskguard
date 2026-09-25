@@ -1,10 +1,10 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 title DeskGuard - zrok Setup
 
-set "ZROK=%~dp0.zrok\zrok2.exe"
+set "ZROK=%~dp0..\.zrok\zrok2.exe"
 set "START_SCRIPT=%~dp0Start_DeskGuard_Public.ps1"
 
 if not exist "%ZROK%" (

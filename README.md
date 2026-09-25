@@ -10,10 +10,11 @@ settings without touching code. Everything stays on your machine.
 
 | File | Purpose |
 |------|---------|
-| `deskguard.py` | The recorder — run this in the background; the webcam is activated only during a lock session in hotkey mode |
-| `dashboard.py` | The review UI — run when you want to browse clips or change settings |
-| `deskguard_config.py` | Shared config loader used by both of the above |
-| `config.json` | Your settings — created automatically on first run |
+| `src/deskguard.py` | The recorder — run this in the background; the webcam is activated only during a lock session in hotkey mode |
+| `src/dashboard.py` | The review UI — run when you want to browse clips or change settings |
+| `src/deskguard_config.py` | Shared config loader used by both of the above |
+| `config/config.json` | Your settings — created automatically on first run |
+| `scripts/` | Windows build, launch, service, scheduler, and deployment scripts |
 | `recordings/clips/videos/` | Video files only |
 | `recordings/clips/metadata/` | Per-clip JSON metadata |
 | `recordings/clips/snapshots/` | Identification snapshots |
@@ -40,7 +41,8 @@ settings without touching code. Everything stays on your machine.
 
 ## What the dashboard does
 
-Run `python dashboard.py` and open `http://127.0.0.1:5151` (binds to
+Run `Open_DeskGuard_Dashboard.bat` to start the dashboard if needed and open
+it automatically. The dashboard is available at `http://127.0.0.1:5151` (binds to
 localhost only — not reachable from other machines on your network):
 
 - **Recordings list** — every clip with a thumbnail, time, duration, size,
@@ -61,9 +63,9 @@ localhost only — not reachable from other machines on your network):
 ### Standalone Windows deployment
 
 For a device without a Python development setup, copy the project folder to
-the Windows device and double-click `DeskGuard_Build.bat`. It installs every
+the Windows device and double-click `scripts\DeskGuard_Build.bat`. It installs every
 required dependency and creates standalone executables in `dist/`. Then run
-`DeskGuard_Run.bat` to start the recorder, watchdog, and dashboard together.
+`scripts\DeskGuard_Run.bat` to start the recorder, watchdog, and dashboard together.
 Open `http://127.0.0.1:5151` for the dashboard. DeskGuard is Windows-only
 because it uses Win32 webcam, lock, hotkey, and input-hook APIs.
 
@@ -76,13 +78,13 @@ because it uses Win32 webcam, lock, hotkey, and input-hook APIs.
    ```
 3. Start the recorder:
    ```
-   python deskguard.py
+   python src\deskguard.py
    ```
    Press Ctrl+Alt+L to test — the DeskGuard overlay should appear. Enter the
    configured `unlock_code` (the sample config uses `1234`) to dismiss it.
 4. In a separate terminal, start the dashboard:
    ```
-   python dashboard.py
+   python src\dashboard.py
    ```
    Open `http://127.0.0.1:5151` to browse.
 
@@ -90,25 +92,25 @@ because it uses Win32 webcam, lock, hotkey, and input-hook APIs.
 
 NSSM (the Non-Sucking Service Manager) can keep the DeskGuard dashboard
 running in the background and start it automatically with Windows. The
-included `DeskGuard_NSSM_Setup.bat` installs and controls a service named
+included `scripts\DeskGuard_NSSM_Setup.bat` installs and controls a service named
 `DeskGuardDashboard`.
 
 NSSM is used for the **dashboard only**. Do not install `deskguard.py` or
 `watchdog.py` as NSSM services: Windows services run in Session 0, while the
 recorder and watchdog must run in the logged-in user's interactive session to
 access the webcam, receive lock notifications, and install input hooks. Use
-`DeskGuard_TaskScheduler_Setup.bat` for those two processes instead.
+`scripts\DeskGuard_TaskScheduler_Setup.bat` for those two processes instead.
 
 #### Install and start the dashboard service
 
 1. Download NSSM from [nssm.cc](https://nssm.cc/download) and extract
    `nssm.exe`.
 2. Place `nssm.exe` in either `C:\nssm\nssm.exe`, the DeskGuard project
-   folder beside `DeskGuard_NSSM_Setup.bat`, or a directory on `PATH`. The
+   folder beside `scripts\DeskGuard_NSSM_Setup.bat`, or a directory on `PATH`. The
    setup script checks those locations in that order.
-3. Make sure Python is available on `PATH` and that `dashboard.py` is in the
+3. Make sure Python is available on `PATH` and that `src\dashboard.py` is in the
    DeskGuard project folder.
-4. Right-click `DeskGuard_NSSM_Setup.bat` and choose **Run as administrator**.
+4. Right-click `scripts\DeskGuard_NSSM_Setup.bat` and choose **Run as administrator**.
 5. Choose **5 — Install service**. The script configures automatic startup,
    restarts the dashboard after a crash, and starts the service.
 
@@ -129,7 +131,7 @@ https://deskguard.shares.zrok.io
 ```
 
 The zrok layer does not replace the DeskGuard dashboard login. The dashboard
-password is configured in `config.json` and can be changed from Dashboard
+password is configured in `config\config.json` and can be changed from Dashboard
 Settings. Hosted zrok may show its safety interstitial on the first visit;
 choose **Visit Share** once, after which the browser remembers the choice.
 
@@ -137,14 +139,14 @@ choose **Visit Share** once, after which the browser remembers the choice.
 
 1. Download the official `zrok2.exe` release and place it at
    `.zrok\zrok2.exe`.
-2. Run `DeskGuard_Zrok_Setup.bat` from this project folder.
+2. Run `scripts\DeskGuard_Zrok_Setup.bat` from this project folder.
 3. Enter the zrok enable token when prompted. The token is not saved in the
    project files.
 4. Start DeskGuard normally, or let the setup/startup task launch the Python
    dashboard and zrok share at Windows logon.
 
 The setup reserves the `public:deskguard` name, which keeps the URL stable
-across share restarts. `Start_DeskGuard_Public.ps1` starts the dashboard and
+across share restarts. `scripts\Start_DeskGuard_Public.ps1` starts the dashboard and
 share without zrok Basic Auth so the browser reaches the DeskGuard login.
 Keep the URL private and use a strong dashboard password; the dashboard
 contains recorded video and management controls.
@@ -164,7 +166,7 @@ does not start, choose **4 — Check status and logs** and inspect the error log
 Once you've confirmed it works, run it silently with `pythonw.exe` instead
 of `python.exe`:
 ```
-pythonw.exe deskguard.py
+pythonw.exe src\deskguard.py
 ```
 To have it start automatically every time you log in to Windows:
 
@@ -172,14 +174,14 @@ To have it start automatically every time you log in to Windows:
    Startup folder.
 2. Create a shortcut in that folder pointing to:
    ```
-   pythonw.exe "C:\full\path\to\deskguard.py"
+   pythonw.exe "C:\full\path\to\deskguard\src\deskguard.py"
    ```
    (Right-click the shortcut → Properties → set "Start in" to the
-   deskguard folder, so it can find `recordings/` and `config.json`
+   deskguard folder, so it can find `recordings/` and `config\config.json`
    correctly.)
 
 The dashboard is meant to be opened on demand rather than run constantly —
-start it with `python dashboard.py` whenever you want to review clips, and
+start it with `python src\dashboard.py` whenever you want to review clips, and
 close the terminal when you're done.
 
 To stop the recorder, use Task Manager and end the `pythonw.exe` process

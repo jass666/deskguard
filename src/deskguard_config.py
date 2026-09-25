@@ -14,8 +14,8 @@ if getattr(sys, "frozen", False):
     # runtime data must live beside the executable instead.
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
 RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
 CLIPS_DIR = os.path.join(RECORDINGS_DIR, "clips")
 VIDEO_DIR = os.path.join(CLIPS_DIR, "videos")
@@ -77,7 +77,7 @@ def load_config():
 
 
 def save_config(cfg):
-    os.makedirs(BASE_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
     with open(tmp_path, "w") as f:
         json.dump(cfg, f, indent=2)

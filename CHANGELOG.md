@@ -17,6 +17,11 @@ Project created and maintained by **Jaswant Kanojia**.
   reserved-name creation, and startup-task registration.
 - Added `Start_DeskGuard_Public.ps1` to start the local dashboard and reconnect
   the reserved zrok share after Windows logon.
+- Added `Open_DeskGuard_Dashboard.bat` and `Open_DeskGuard_Dashboard.ps1` to
+  start the dashboard when needed, open its stable local URL automatically,
+  and report detected LAN addresses.
+- Added inclusive start and end date filters to the dashboard recordings view;
+  date selections remain active with detection filters and playback controls.
 - Documented zrok setup, the dashboard-only authentication model, the hosted
   zrok interstitial, and the security considerations for remote recordings.
 
