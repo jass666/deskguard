@@ -166,9 +166,20 @@ def frame_signature(frame):
 # ---------------------------------------------------------------------------
 # Storage management
 # ---------------------------------------------------------------------------
+def _original_clip_paths(folder):
+    """Every recorded clip's .mp4 path, excluding dashboard.py's
+    *.browser.mp4 playback-cache copies (those are regenerable and
+    shouldn't count toward the storage cap or be picked as "oldest").
+    """
+    return [
+        f for f in glob.glob(os.path.join(folder, "*.mp4"))
+        if not f.endswith(".browser.mp4")
+    ]
+
+
 def folder_size_bytes(folder):
     total = 0
-    for f in glob.glob(os.path.join(folder, "*.mp4")):
+    for f in _original_clip_paths(folder):
         try:
             total += os.path.getsize(f)
         except OSError:
@@ -180,7 +191,7 @@ def enforce_storage_cap(max_total_storage_gb):
     """Delete oldest clips (+ their metadata/thumbnail) until under the cap."""
     cap_bytes = max_total_storage_gb * 1024 * 1024 * 1024
     files = sorted(
-        glob.glob(os.path.join(VIDEO_DIR, "*.mp4")),
+        _original_clip_paths(VIDEO_DIR),
         key=os.path.getmtime,
     )
     while folder_size_bytes(VIDEO_DIR) > cap_bytes and files:
@@ -188,6 +199,7 @@ def enforce_storage_cap(max_total_storage_gb):
         stem = os.path.splitext(os.path.basename(oldest))[0]
         for related in (
             oldest,
+            os.path.join(VIDEO_DIR, stem + ".browser.mp4"),
             os.path.join(METADATA_DIR, stem + ".json"),
             os.path.join(SNAPSHOTS_DIR, stem + "_snapshot.jpg"),
             os.path.join(THUMBNAILS_DIR, stem + ".thumb.jpg"),

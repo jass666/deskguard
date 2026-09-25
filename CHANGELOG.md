@@ -8,7 +8,7 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
-## Unreleased – Persistent zrok Dashboard Access
+## v1.5 – Persistent zrok Dashboard Access
 
 ### Added
 - Added a reserved zrok public name for the remote dashboard:
@@ -28,6 +28,25 @@ Project created and maintained by **Jaswant Kanojia**.
 ### Security
 - The zrok enable token and dashboard password are intentionally not stored
   in the repository. The remote URL relies on DeskGuard's own dashboard login.
+
+### Fixed
+- Fixed the dashboard's single-clip Delete button returning a 500 error.
+  `delete_clip_assets()` was accidentally registered as its own route on the
+  same URL/method as `delete_recording()`; since it has no return value,
+  Werkzeug always dispatched incoming requests to it first, and Flask raised
+  `TypeError: view function did not return a valid response` on every click
+  (the files were already deleted by that point, so the error masked a
+  working delete). It's now a plain helper called by `delete_recording()` and
+  `delete_selected_recordings()`, not a route of its own.
+- Fixed storage-cap accounting and eviction counting each clip's
+  `.browser.mp4` playback-cache copy as if it were a separate recording.
+  `folder_size_bytes()` and `enforce_storage_cap()` globbed `*.mp4`, which
+  also matched the H.264 copies generated for dashboard playback, roughly
+  doubling the reported/enforced size for any clip that had been viewed and
+  occasionally causing the oldest-first eviction to delete a cache file
+  instead of an actual recording. Both now operate only on original clip
+  files, and evicting a clip now also removes its `.browser.mp4` copy so it
+  can't be orphaned.
 
 ---
 

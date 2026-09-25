@@ -574,9 +574,17 @@ def serve_thumbnail(filename):
     return send_from_directory(THUMBNAILS_DIR, os.path.basename(thumb), conditional=True)
 
 
-@app.route("/delete/<path:filename>", methods=["POST"])
 def delete_clip_assets(filename):
-    """Delete one clip and all generated files associated with it."""
+    """Delete one clip and all generated files associated with it.
+
+    Not a route by itself - delete_recording() and
+    delete_selected_recordings() both call this directly as a plain
+    helper. (It used to also be decorated with @app.route on the same
+    URL/method as delete_recording; since it has no return value,
+    Werkzeug dispatched incoming requests to this one first and Flask
+    raised a 500 on every single-clip delete, even though the files were
+    already removed by the time it crashed.)
+    """
     base = filename[:-4]
     for path in (
         os.path.join(VIDEO_DIR, filename),
