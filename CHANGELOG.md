@@ -4,7 +4,78 @@ All notable changes to **DeskGuard** are documented here.
 
 Project created and maintained by **Jaswant Kanojia**.
 
-**Latest release date:** 17-09-2026
+**Latest release date:** 28-09-2026
+
+---
+
+## v1.6 – Silent-Failure Fixes, Startup Diagnostics + Kill Switch
+**Date:** 28-09-2026
+
+### Why
+The recorder stopped responding to the lock hotkey (Ctrl+Alt+L) and showed no
+sign of starting. The last log entries were from 25-09-2026: the recorder had
+worked normally until then, and after that nothing was logged at all - no
+startup line and no error. Under `pythonw.exe` / `--noconsole` builds, every
+failure on the start-up path was invisible, so the cause could not be seen.
+This release makes those failures visible and closes the paths that could
+leave the hotkey dead.
+
+### Fixed
+- **Overlay crash no longer disables the hotkey.** The lock overlay runs on
+  its own thread. If it raised an exception, the thread died silently while
+  `virtual_lock_active` stayed `True`, so every later Ctrl+Alt+L was ignored
+  and the camera kept running. The overlay is now wrapped: crashes are logged
+  with a traceback, and the lock state, heartbeat, recording, and camera are
+  reset if the overlay exits without a correct unlock.
+- **`CameraSupervisor` no longer shadows `threading.Thread._stop`.** The
+  stop event was named `_stop`, overwriting a method Python's `Thread` uses
+  internally, which could break thread shutdown. Renamed to `_stop_evt`.
+
+### Added
+- **Hotkey logging.** Every press logs "Hotkey pressed."; a press ignored
+  because a lock is already flagged active logs that too.
+- **Hotkey registration errors are now visible.** A failed `RegisterHotKey`
+  logs the WinError code (1409 = already registered by another program or
+  another DeskGuard instance) and shows a message box pointing to Dashboard
+  Settings, instead of exiting silently.
+- **Instance-guard exit is logged.** A second recorder that exits because one
+  is already running now writes a log line explaining what to do, instead of
+  leaving no trace.
+- **Crash logging.** Uncaught exceptions on the main thread or any worker
+  thread are written to `deskguard_events.log`, and a "DeskGuard recorder
+  starting (pid N)" line is logged at launch so a successful start is
+  distinguishable from a silent failure.
+- **`scripts\DeskGuard_KillSwitch.bat` / `.ps1`** - one-click emergency stop.
+  Self-elevates, then: disables the `DeskGuardRecorder`, `DeskGuardWatchdog`,
+  and `DeskGuard Public Share` tasks; kills the watchdog *before* the recorder
+  (otherwise the watchdog fires `LockWorkStation()` when the recorder dies
+  mid-lock); kills the recorder; stops the `DeskGuardDashboard` NSSM service
+  and sets it to Disabled; kills the dashboard and the zrok share; removes
+  `heartbeat.json`; releases any cursor clip; and verifies nothing is left,
+  including port 5151. Processes are matched by exe name (`dist\*.exe`
+  builds) or by command line (`src\deskguard.py`, `watchdog.py`,
+  `dashboard.py`). `DeskGuard_KillSwitch.bat restore` re-enables everything.
+  All actions are logged to `logs\killswitch.log`. If stuck behind the
+  overlay, Ctrl+Alt+Del -> Task Manager -> Run new task -> the `.bat`.
+
+### Known issues / notes
+- `heartbeat.json` replace occasionally fails with `WinError 5` when the
+  watchdog has the file open at the same moment. The recorder falls back to a
+  direct write and logs a warning; this is harmless and expected.
+- Recording fails (logged, not crashed) if another app such as Zoom or Teams
+  is holding the webcam when the lock is activated; the camera supervisor
+  keeps retrying with backoff.
+- Start-up failures from an old recorder process still running, or from a
+  Scheduled Task pointing at a stale `pythonw.exe` path, are now logged or
+  shown, but the fix is still manual: end the old process, or re-run
+  `DeskGuard_TaskScheduler_Setup.bat`.
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `src/deskguard.py` | Modified - overlay crash handling, hotkey/start-up logging, `_stop_evt` rename |
+| `scripts/DeskGuard_KillSwitch.bat` | New - launcher |
+| `scripts/DeskGuard_KillSwitch.ps1` | New - stop/restore logic |
 
 ---
 

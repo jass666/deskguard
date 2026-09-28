@@ -245,7 +245,7 @@ class CameraSupervisor(threading.Thread):
         self._frame = None
         self._frame_id = 0
         self._frame_time = 0.0
-        self._stop = threading.Event()
+        self._stop_evt = threading.Event()
         self._active = threading.Event()      # set while a capture is needed
         self._recording = threading.Event()  # set => pump at full fps
         self._consecutive_failures = 0
@@ -273,7 +273,7 @@ class CameraSupervisor(threading.Thread):
             self._recording.clear()
 
     def shutdown(self):
-        self._stop.set()
+        self._stop_evt.set()
         self._active.set()  # wake a supervisor waiting for activation
 
     # -- internals ----------------------------------------------------------
@@ -321,10 +321,10 @@ class CameraSupervisor(threading.Thread):
 
     def run(self):
         backoff = 1.0
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             if not self._active.is_set():
                 self._close()
-                self._stop.wait(0.25)
+                self._stop_evt.wait(0.25)
                 continue
 
             if self._cap is None:
@@ -334,7 +334,7 @@ class CameraSupervisor(threading.Thread):
                 else:
                     # Never give up - the blocking app may close, or the user
                     # may unlock and free the device.
-                    self._stop.wait(backoff)
+                    self._stop_evt.wait(backoff)
                     backoff = min(backoff * 2, 30.0)
                     continue
 
@@ -365,7 +365,7 @@ class CameraSupervisor(threading.Thread):
 
             sleep_for = interval - (time.time() - loop_start)
             if sleep_for > 0:
-                self._stop.wait(sleep_for)
+                self._stop_evt.wait(sleep_for)
 
         self._close()
 
@@ -874,8 +874,11 @@ class SessionWatcher:
                 threading.Thread(target=stop_native_recording, daemon=True).start()
             return 0
         elif msg == WM_HOTKEY and wparam == HOTKEY_ID:
+            log("Hotkey pressed.")
             if not self.virtual_lock_active:
                 self._activate_virtual_lock()
+            else:
+                log("Hotkey ignored: virtual lock is already flagged active.")
             return 0
         elif msg == win32con.WM_DESTROY:
             win32gui.PostQuitMessage(0)
@@ -900,13 +903,24 @@ class SessionWatcher:
             threading.Thread(target=stop_virtual_recording, daemon=True).start()
             self.virtual_lock_active = False
 
-        threading.Thread(
-            target=VirtualLockOverlay(
-                self.cfg.get("unlock_code", "1234"), unlock,
-                block_input=bool(self.cfg.get("block_input", True)),
-            ).show,
-            daemon=True,
-        ).start()
+        def overlay_main():
+            try:
+                VirtualLockOverlay(
+                    self.cfg.get("unlock_code", "1234"), unlock,
+                    block_input=bool(self.cfg.get("block_input", True)),
+                ).show()
+            except Exception:
+                log("ERROR: lock overlay crashed:\n" +
+                    logging.Formatter().formatException(sys.exc_info()))
+            finally:
+                # If the overlay died without a correct unlock, do not leave
+                # the hotkey permanently disabled or the camera running.
+                if self.virtual_lock_active:
+                    log("Overlay exited without unlock - resetting lock state.")
+                    unlock()
+
+        threading.Thread(target=overlay_main, daemon=True,
+                         name="DeskGuardOverlay").start()
 
     def run(self):
         wc = win32gui.WNDCLASS()
@@ -928,7 +942,16 @@ class SessionWatcher:
             key = str(self.cfg.get("hotkey_key", "L"))[0].upper()
             if not register_hotkey(self.hwnd, HOTKEY_ID,
                                    hotkey_flags(self.cfg), ord(key)):
-                raise RuntimeError(f"Could not register hotkey for {key}.")
+                err = ctypes.get_last_error()
+                combo = f"{self.cfg.get('hotkey_modifiers', 'ctrl+alt')}+{key}"
+                hint = (" (already used by another program or another DeskGuard instance)"
+                        if err == 1409 else "")
+                msg = f"Could not register hotkey {combo}: WinError {err}{hint}."
+                log("ERROR: " + msg)
+                ctypes.windll.user32.MessageBoxW(
+                    None, msg + "\nChange the hotkey in dashboard Settings.",
+                    "DeskGuard", 0x10)
+                raise RuntimeError(msg)
 
         # Always start the lightweight supervisor, but only activate the
         # webcam when it is needed. Native lock mode may pre-open it because
@@ -974,11 +997,28 @@ if __name__ == "__main__":
     _recorder_mutex = ctypes.windll.kernel32.CreateMutexW(
         None, False, "Local\\DeskGuardRecorder"
     )
+    _mutex_err = ctypes.windll.kernel32.GetLastError()
     if not _recorder_mutex:
+        log(f"ERROR: could not create instance guard (WinError {_mutex_err}). Exiting.")
         sys.exit("Could not create DeskGuard recorder instance guard.")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    if _mutex_err == 183:  # ERROR_ALREADY_EXISTS
+        log("Another DeskGuard recorder is already running - this instance is exiting. "
+            "If the hotkey does nothing, end the old pythonw.exe / "
+            "DeskGuardRecorder.exe in Task Manager and start again.")
         sys.exit("DeskGuard recorder is already running.")
 
-    config = load_config()
-    watcher = SessionWatcher(config)
-    watcher.run()
+    import traceback
+
+    def _log_uncaught(exc_type, exc, tb):
+        log("FATAL: " + "".join(traceback.format_exception(exc_type, exc, tb)))
+    sys.excepthook = _log_uncaught
+    threading.excepthook = lambda a: _log_uncaught(a.exc_type, a.exc_value, a.exc_traceback)
+
+    log(f"DeskGuard recorder starting (pid {os.getpid()}).")
+    try:
+        config = load_config()
+        watcher = SessionWatcher(config)
+        watcher.run()
+    except Exception:
+        _log_uncaught(*sys.exc_info())
+        raise
