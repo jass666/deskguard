@@ -8,6 +8,37 @@ Project created and maintained by **Jaswant Kanojia**.
 
 ---
 
+## v1.8 – Automatic Recorder Recovery
+**Date:** 01-10-2026
+
+### Fixed
+- **Recorder recovery is now automatic.** The watchdog relaunches the
+  recorder when its heartbeat disappears, becomes stale, or belongs to a
+  hung process. A cooldown prevents restart loops, and recovery targets only
+  the exact process id recorded in the heartbeat.
+- **Hotkey activation no longer waits for recording startup.** The virtual
+  lock overlay is created immediately after the hotkey press, while webcam
+  and writer initialization runs separately. Camera or codec delays can no
+  longer make a successful hotkey press appear ignored.
+- **Packaged and source watchdogs use the matching recorder launcher.** A
+  frozen watchdog starts `DeskGuardRecorder.exe`; source runs start the source
+  recorder script.
+
+### Added
+- `watchdog_restart_cooldown_sec` configuration default, set to 30 seconds.
+- Clear startup logging for successful global hotkey registration.
+
+### Verification
+- Confirmed both recorder and watchdog compile successfully.
+- Killed the active recorder while unlocked and verified that the watchdog
+  relaunched it and the replacement registered `Ctrl+Alt+L` successfully.
+
+### Setup note
+- Run `scripts\DeskGuard_TaskScheduler_Setup.bat` once as Administrator to
+  start the recorder and watchdog automatically after Windows logon.
+
+---
+
 ## v1.7 – Canonical Packaged Runtime Configuration
 **Date:** 01-10-2026
 

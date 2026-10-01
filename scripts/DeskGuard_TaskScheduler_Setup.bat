@@ -1,71 +1,24 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
-:: DeskGuard - Task Scheduler setup for deskguard.py (recorder) and
-:: watchdog.py (fallback native-lock trigger).
-::
-:: WHY THIS ISN'T AN NSSM SERVICE (like the dashboard is):
-:: Windows services run in Session 0, isolated from the interactive
-:: desktop - they cannot open a camera tied to the logged-in user's
-:: session, draw the full-screen overlay, or install the low-level
-:: input hooks in input_lock.py. Both scripts need to run AS the
-:: logged-in user, IN their interactive session. A "run at log on"
-:: Scheduled Task does exactly that; an NSSM service cannot.
-::
-:: Run this file as Administrator.
-
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo Requesting administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb runAs"
-    exit /b
-)
-
-set "APP_DIR=%~dp0.."
-set "PYTHONW="
-set "PYTHON="
-
-for /f "delims=" %%i in ('where pythonw 2^>nul') do (
-    if "!PYTHONW!"=="" set "PYTHONW=%%i"
-)
-for /f "delims=" %%i in ('where python 2^>nul') do (
-    if "!PYTHON!"=="" set "PYTHON=%%i"
-)
-if "!PYTHONW!"=="" set "PYTHONW=!PYTHON!"
-if "!PYTHON!"=="" (
-    echo.
-    echo ERROR: Python was not found on PATH.
+:: Keep the user-facing entry point as a .bat, but do the actual task
+:: registration in PowerShell.  schtasks.exe is very easy to misquote when
+:: both the interpreter and the .py path contain spaces.
+set "SETUP_PS1=%~dp0DeskGuard_TaskScheduler_Setup.ps1"
+if not exist "%SETUP_PS1%" (
+    echo ERROR: Missing "%SETUP_PS1%".
     pause
     exit /b 1
 )
 
-title DeskGuard - Task Scheduler Setup
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    echo Requesting administrator privileges...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process PowerShell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%SETUP_PS1%'"
+    exit /b
+)
 
-echo.
-echo This will register two Scheduled Tasks that start at logon, in
-echo YOUR interactive session:
-echo   1. DeskGuardRecorder  -^> %APP_DIR%src\deskguard.py    (pythonw, silent)
-echo   2. DeskGuardWatchdog  -^> %APP_DIR%src\watchdog.py      (pythonw, silent)
-echo.
-echo The watchdog must run as its own process tree so killing the
-echo recorder does not also kill the thing watching it.
-echo.
-pause
-
-schtasks /Create /TN "DeskGuardRecorder" /SC ONLOGON /RL HIGHEST /F ^
-    /TR "\"%PYTHONW%\" \"%APP_DIR%src\deskguard.py\""
-
-schtasks /Create /TN "DeskGuardWatchdog" /SC ONLOGON /RL HIGHEST /F ^
-    /TR "\"%PYTHONW%\" \"%APP_DIR%src\watchdog.py\""
-
-echo.
-echo Done. Both tasks are set to "At log on" for this user.
-echo Start them now without logging off/on again:
-echo   schtasks /Run /TN "DeskGuardRecorder"
-echo   schtasks /Run /TN "DeskGuardWatchdog"
-echo.
-echo To remove them later:
-echo   schtasks /Delete /TN "DeskGuardRecorder" /F
-echo   schtasks /Delete /TN "DeskGuardWatchdog" /F
-echo.
-pause
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SETUP_PS1%"
+set "RESULT=%errorLevel%"
+if not "%RESULT%"=="0" pause
+exit /b %RESULT%

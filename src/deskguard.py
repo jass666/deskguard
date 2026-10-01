@@ -889,9 +889,7 @@ class SessionWatcher:
         self.virtual_lock_active = True
         self._locked_for_heartbeat = True
         write_heartbeat(True)
-        log("Virtual lock activated - starting recording.")
-        self.camera.set_active(True)
-        self.session.start()
+        log("Virtual lock activated - showing overlay.")
 
         def unlock():
             log("Virtual lock unlocked - stopping recording.")
@@ -902,6 +900,17 @@ class SessionWatcher:
                 self.camera.set_active(False)
             threading.Thread(target=stop_virtual_recording, daemon=True).start()
             self.virtual_lock_active = False
+
+        def start_recording():
+            try:
+                log("Virtual lock recording startup.")
+                self.camera.set_active(True)
+                self.session.start()
+            except Exception:
+                log("ERROR: virtual lock recording startup failed:\n" +
+                    logging.Formatter().formatException(sys.exc_info()))
+                if self.virtual_lock_active:
+                    unlock()
 
         def overlay_main():
             try:
@@ -921,6 +930,11 @@ class SessionWatcher:
 
         threading.Thread(target=overlay_main, daemon=True,
                          name="DeskGuardOverlay").start()
+        # The overlay must be launched before camera/writer initialization.
+        # A blocked webcam or codec should never make a successful hotkey
+        # press look like it was ignored.
+        threading.Thread(target=start_recording, daemon=True,
+                         name="DeskGuardRecordingStartup").start()
 
     def run(self):
         wc = win32gui.WNDCLASS()
@@ -952,6 +966,7 @@ class SessionWatcher:
                     None, msg + "\nChange the hotkey in dashboard Settings.",
                     "DeskGuard", 0x10)
                 raise RuntimeError(msg)
+            log(f"Global hotkey registered: {self.cfg.get('hotkey_modifiers', 'ctrl+alt')}+{key}.")
 
         # Always start the lightweight supervisor, but only activate the
         # webcam when it is needed. Native lock mode may pre-open it because

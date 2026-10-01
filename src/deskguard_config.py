@@ -59,6 +59,7 @@ DEFAULTS = {
                                       # most the current segment, not the whole session
     "heartbeat_interval_sec": 2,     # how often deskguard.py refreshes heartbeat.json
     "watchdog_timeout_sec": 6,       # watchdog.py's stale/dead threshold
+    "watchdog_restart_cooldown_sec": 30,  # minimum delay between auto-restarts
 }
 
 RESOLUTION_PRESETS = [
