@@ -4,7 +4,45 @@ All notable changes to **DeskGuard** are documented here.
 
 Project created and maintained by **Jaswant Kanojia**.
 
-**Latest release date:** 28-09-2026
+**Latest release date:** 01-10-2026
+
+---
+
+## v1.7 – Canonical Packaged Runtime Configuration
+**Date:** 01-10-2026
+
+### Fixed
+- **Recurring missing overlay / dead hotkey after packaged launches.** The
+  source and dashboard processes read `config\config.json`, but older
+  PyInstaller executables treated `dist` as their data root. That created a
+  second configuration tree and allowed the packaged recorder to fall back to
+  native/default mode, so `Ctrl+Alt+L` was never registered even though the
+  dashboard showed hotkey mode.
+- Frozen builds now resolve `dist\*.exe` runtime data to the project root,
+  using the same `config\config.json`, `logs`, and `recordings` as the source
+  processes. Standalone folders that contain the executable directly keep
+  their previous behavior.
+- `DeskGuard_Run.bat` and `DeskGuard_Build.bat` synchronize the packaged
+  compatibility config files while older executables are being phased out.
+- The build now stops before deleting `dist` when an elevated or orphaned
+  DeskGuard process still holds an executable, avoiding a partial distribution
+  that falsely reports a successful start.
+- The run script now validates that all three packaged executables exist before
+  launching and verifies the recorder and dashboard processes afterward,
+  instead of reporting success after a partial build.
+- Replaced batch `timeout` delays with `ping`-based delays so builds launched
+  from redirected or non-interactive consoles do not emit the misleading
+  "Input redirection is not supported" message.
+
+### Verification
+- Rebuilt all three PyInstaller executables successfully on 01-10-2026.
+- Confirmed the packaged dashboard returned HTTP 200 at
+  `http://127.0.0.1:5151` after `DeskGuard_Run.bat`.
+
+### Upgrade note
+- Rebuild the executables once with `scripts\DeskGuard_Build.bat`, then start
+  with `scripts\DeskGuard_Run.bat`. Existing old executables can still read
+  stale `dist` configuration until they are replaced.
 
 ---
 

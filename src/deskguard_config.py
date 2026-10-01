@@ -10,9 +10,17 @@ import os
 import sys
 
 if getattr(sys, "frozen", False):
-    # PyInstaller one-file builds unpack modules into a temporary directory;
-    # runtime data must live beside the executable instead.
-    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    # The packaged executables are built into <project>\dist, but runtime
+    # data is shared with the source/dashboard processes in the project root.
+    # Older builds used the EXE directory as BASE_DIR, creating a second
+    # config/log/recordings tree under dist and allowing lock_mode to drift.
+    _exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if os.path.basename(_exe_dir).lower() == "dist":
+        BASE_DIR = os.path.dirname(_exe_dir)
+    else:
+        # Preserve support for a genuinely standalone folder containing the
+        # executable and its runtime data.
+        BASE_DIR = _exe_dir
 else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
